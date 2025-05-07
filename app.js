@@ -3,7 +3,6 @@ const balanceEl = document.getElementById("balance");
 const incomeEl = document.getElementById("income-total");
 const expenseEl = document.getElementById("expense-total");
 const transactionForm = document.getElementById("transaction-form");
-const formSubmitBtn = document.getElementById("transaction-submit");
 const typeInput = document.getElementById("transaction-type");
 const categoryInput = document.getElementById("transaction-category");
 const descriptionInput = document.getElementById("transaction-description");
@@ -12,15 +11,8 @@ const dateInput = document.getElementById("transaction-date");
 const transactionList = document.getElementById("transaction-list");
 const tabs = document.querySelectorAll(".tab");
 const budgetChart = document.getElementById("budget-chart");
-
-// Edit transaction variables
-let isEditing = false;
-let editTransactionId = null;
-
-// Feedback message element
-const feedbackMessage = document.createElement("div");
-feedbackMessage.className = "feedback-message";
-document.querySelector(".form-container").appendChild(feedbackMessage);
+const categoryChart = document.getElementById("category-chart");
+const chartTabs = document.querySelectorAll(".chart-tab");
 
 // Date Range Filter Elements
 const startDateInput = document.getElementById("start-date");
@@ -49,6 +41,41 @@ const incomeCategoriesList = document.getElementById("income-categories-list");
 const expenseCategoriesList = document.getElementById(
   "expense-categories-list"
 );
+
+// Edit Transaction Modal Elements
+const editTransactionModal = document.getElementById("edit-transaction-modal");
+const closeEditModal = document.querySelector(".close-edit-modal");
+const editTransactionForm = document.getElementById("edit-transaction-form");
+const editTransactionId = document.getElementById("edit-transaction-id");
+const editTypeInput = document.getElementById("edit-transaction-type");
+const editCategoryInput = document.getElementById("edit-transaction-category");
+const editDescriptionInput = document.getElementById(
+  "edit-transaction-description"
+);
+const editAmountInput = document.getElementById("edit-transaction-amount");
+const editDateInput = document.getElementById("edit-transaction-date");
+const editDeleteBtn = document.getElementById("edit-delete-btn");
+const editCancelBtn = document.getElementById("edit-cancel-btn");
+const editAddCategoryBtn = document.getElementById("edit-add-category-btn");
+
+// Custom category dropdown elements
+const customCategorySelect = document.getElementById("custom-category-select");
+const customSelectTrigger = customCategorySelect.querySelector(
+  ".custom-select-trigger"
+);
+const customOptions = customCategorySelect.querySelector(".custom-options");
+const selectedOptionText =
+  customSelectTrigger.querySelector(".selected-option");
+const categoryEditModal = document.getElementById("category-edit-modal");
+const editCategoryNameInput = document.getElementById(
+  "edit-category-name-inline"
+);
+const saveEditedCategoryBtn = document.getElementById("save-edited-category");
+const cancelCategoryEditBtn = document.getElementById("cancel-category-edit");
+
+// Global variables for category editing
+let currentCategoryId = null;
+let currentCategoryType = null;
 
 // Default categories
 const defaultCategories = {
@@ -79,6 +106,8 @@ function saveCategories() {
 
 // Initialize Chart
 let myChart;
+let myCategoryChart;
+
 function initializeChart() {
   const ctx = budgetChart.getContext("2d");
   myChart = new Chart(ctx, {
@@ -90,11 +119,12 @@ function initializeChart() {
           label: "Amount ($)",
           data: [0, 0],
           backgroundColor: [
-            "rgba(16, 185, 129, 0.6)", // income color
-            "rgba(239, 68, 68, 0.6)", // expense color
+            "rgba(5, 150, 105, 0.7)", // income color - updated
+            "rgba(220, 38, 38, 0.7)", // expense color - updated
           ],
-          borderColor: ["rgba(16, 185, 129, 1)", "rgba(239, 68, 68, 1)"],
+          borderColor: ["rgba(5, 150, 105, 1)", "rgba(220, 38, 38, 1)"],
           borderWidth: 1,
+          borderRadius: 6, // Rounded bars
         },
       ],
     },
@@ -104,9 +134,26 @@ function initializeChart() {
       scales: {
         y: {
           beginAtZero: true,
+          grid: {
+            color: "rgba(156, 163, 175, 0.1)", // Lighter grid lines
+          },
           ticks: {
             callback: function (value) {
               return "$" + value;
+            },
+            font: {
+              family: "'Segoe UI', sans-serif",
+            },
+          },
+        },
+        x: {
+          grid: {
+            display: false, // Remove x-axis grid lines
+          },
+          ticks: {
+            font: {
+              family: "'Segoe UI', sans-serif",
+              weight: "500",
             },
           },
         },
@@ -118,10 +165,115 @@ function initializeChart() {
               return "$" + context.parsed.y;
             },
           },
+          backgroundColor: "rgba(91, 33, 182, 0.8)", // Match primary color
+          titleFont: {
+            family: "'Segoe UI', sans-serif",
+            size: 14,
+          },
+          bodyFont: {
+            family: "'Segoe UI', sans-serif",
+            size: 13,
+          },
+          padding: 12,
+          cornerRadius: 8,
         },
       },
     },
   });
+
+  initializeCategoryChart();
+}
+
+// Initialize the category chart
+function initializeCategoryChart() {
+  const ctx = categoryChart.getContext("2d");
+
+  // Default to expense breakdown
+  const chartData = getCategoryChartData("expense");
+
+  // Check if we're on mobile
+  const isMobile = window.innerWidth <= 768;
+
+  myCategoryChart = new Chart(ctx, {
+    type: "doughnut",
+    data: chartData,
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: "65%", // Makes the doughnut hole larger
+      plugins: {
+        legend: {
+          position: isMobile ? "bottom" : "right",
+          labels: {
+            boxWidth: isMobile ? 15 : 20,
+            padding: isMobile ? 10 : 15,
+            font: {
+              family: "'Segoe UI', sans-serif",
+              size: 12,
+            },
+          },
+        },
+        tooltip: {
+          backgroundColor: "rgba(91, 33, 182, 0.8)", // Match primary color
+          titleFont: {
+            family: "'Segoe UI', sans-serif",
+            size: 14,
+          },
+          bodyFont: {
+            family: "'Segoe UI', sans-serif",
+            size: 13,
+          },
+          cornerRadius: 8,
+          padding: 12,
+          callbacks: {
+            label: function (context) {
+              const label = context.label || "";
+              const value = context.parsed;
+              const total = context.dataset.data.reduce((a, b) => a + b, 0);
+              const percentage = Math.round((value / total) * 100);
+              return `${label}: ${formatMoney(value)} (${percentage}%)`;
+            },
+          },
+        },
+        title: {
+          display: true,
+          text: "Expense Breakdown by Category",
+          font: {
+            family: "'Segoe UI', sans-serif",
+            size: isMobile ? 14 : 16,
+            weight: "500",
+          },
+          color: "#1f2937",
+          padding: {
+            bottom: 15,
+          },
+        },
+      },
+    },
+  });
+
+  setupCategoryChartTabs();
+
+  // Handle resize events to update chart layout
+  window.addEventListener("resize", handleChartResize);
+}
+
+// Handle chart resize for responsive layout
+function handleChartResize() {
+  if (!myCategoryChart) return;
+
+  const isMobile = window.innerWidth <= 768;
+
+  // Update legend position based on screen size
+  myCategoryChart.options.plugins.legend.position = isMobile
+    ? "bottom"
+    : "right";
+  myCategoryChart.options.plugins.legend.labels.boxWidth = isMobile ? 15 : 20;
+  myCategoryChart.options.plugins.legend.labels.padding = isMobile ? 10 : 15;
+  myCategoryChart.options.plugins.title.font.size = isMobile ? 14 : 16;
+
+  // Update the chart
+  myCategoryChart.update();
 }
 
 // Initialize date inputs
@@ -182,160 +334,32 @@ function formatDate(dateString) {
   return new Date(dateString).toLocaleDateString(undefined, options);
 }
 
-// Add new transaction or update existing one
+// Add new transaction
 function addTransaction(e) {
   e.preventDefault();
 
   // Validation
-  if (!validateTransactionForm()) {
+  if (!descriptionInput.value.trim() || amountInput.value <= 0) {
+    alert("Please add a valid description and amount");
     return;
   }
 
-  if (isEditing) {
-    // Update existing transaction
-    updateTransaction();
-  } else {
-    // Add new transaction
-    const transaction = {
-      id: generateID(),
-      type: typeInput.value,
-      category: categoryInput.value,
-      description: descriptionInput.value.trim(),
-      amount: parseFloat(amountInput.value),
-      date: dateInput.value,
-    };
+  const transaction = {
+    id: generateID(),
+    type: typeInput.value,
+    category: categoryInput.value,
+    description: descriptionInput.value.trim(),
+    amount: parseFloat(amountInput.value),
+    date: dateInput.value,
+  };
 
-    transactions.push(transaction);
-    showFeedback("Transaction added successfully!", "success");
-  }
-
+  transactions.push(transaction);
   saveTransactions();
-
-  // Sort transactions by date (newest first)
-  sortTransactionsByDate();
-
   applyDateFilter();
 
-  // Reset form and state
-  resetForm();
-}
-
-// Validate form inputs
-function validateTransactionForm() {
-  // Clear previous error states
-  descriptionInput.classList.remove("error");
-  amountInput.classList.remove("error");
-  dateInput.classList.remove("error");
-
-  let isValid = true;
-  let errorMessage = "";
-
-  if (!descriptionInput.value.trim()) {
-    descriptionInput.classList.add("error");
-    errorMessage = "Please enter a description";
-    isValid = false;
-  }
-
-  if (!amountInput.value || parseFloat(amountInput.value) <= 0) {
-    amountInput.classList.add("error");
-    errorMessage = errorMessage
-      ? errorMessage + " and a valid amount"
-      : "Please enter a valid amount";
-    isValid = false;
-  }
-
-  if (!dateInput.value) {
-    dateInput.classList.add("error");
-    errorMessage = errorMessage
-      ? errorMessage + " and a date"
-      : "Please enter a date";
-    isValid = false;
-  }
-
-  if (!isValid) {
-    showFeedback(errorMessage, "error");
-  }
-
-  return isValid;
-}
-
-// Update existing transaction
-function updateTransaction() {
-  const index = transactions.findIndex((t) => t.id === editTransactionId);
-
-  if (index !== -1) {
-    transactions[index] = {
-      id: editTransactionId,
-      type: typeInput.value,
-      category: categoryInput.value,
-      description: descriptionInput.value.trim(),
-      amount: parseFloat(amountInput.value),
-      date: dateInput.value,
-    };
-
-    showFeedback("Transaction updated successfully!", "success");
-  }
-}
-
-// Edit transaction
-function editTransaction(id) {
-  // Expand form if collapsed
-  const formContent = document.querySelector(".form-content");
-  if (!formContent.classList.contains("expanded")) {
-    document.querySelector(".form-header").click();
-  }
-
-  const transaction = transactions.find((t) => t.id === id);
-
-  if (!transaction) return;
-
-  // Fill form with transaction data
-  typeInput.value = transaction.type;
-  updateCategoryOptions();
-
-  // Find and select the correct category
-  for (let i = 0; i < categoryInput.options.length; i++) {
-    if (categoryInput.options[i].value === transaction.category) {
-      categoryInput.selectedIndex = i;
-      break;
-    }
-  }
-
-  descriptionInput.value = transaction.description;
-  amountInput.value = transaction.amount;
-  dateInput.value = transaction.date;
-
-  // Update form state
-  isEditing = true;
-  editTransactionId = id;
-
-  // Change button text
-  document.getElementById("transaction-submit").textContent =
-    "Update Transaction";
-
-  // Scroll to form
-  document
-    .querySelector(".form-container")
-    .scrollIntoView({ behavior: "smooth" });
-}
-
-// Reset form and editing state
-function resetForm() {
+  // Reset form
   transactionForm.reset();
   setDefaultDate();
-  isEditing = false;
-  editTransactionId = null;
-  document.getElementById("transaction-submit").textContent = "Add Transaction";
-
-  // Clear any error states
-  descriptionInput.classList.remove("error");
-  amountInput.classList.remove("error");
-  dateInput.classList.remove("error");
-}
-
-// Sort transactions by date - newest first
-function sortTransactionsByDate() {
-  transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
 // Generate random ID
@@ -365,9 +389,6 @@ function addTransactionDOM(transaction) {
   titleDiv.className = "transaction-title";
   titleDiv.textContent = transaction.description;
 
-  const detailsDiv = document.createElement("div");
-  detailsDiv.className = "transaction-details";
-
   const categoryDiv = document.createElement("div");
   categoryDiv.className = "transaction-category";
   categoryDiv.textContent = formatCategory(transaction.category);
@@ -376,11 +397,9 @@ function addTransactionDOM(transaction) {
   dateDiv.className = "transaction-date";
   dateDiv.textContent = formatDate(transaction.date);
 
-  detailsDiv.appendChild(categoryDiv);
-  detailsDiv.appendChild(dateDiv);
-
   transactionInfo.appendChild(titleDiv);
-  transactionInfo.appendChild(detailsDiv);
+  transactionInfo.appendChild(categoryDiv);
+  transactionInfo.appendChild(dateDiv);
 
   const amountDiv = document.createElement("div");
   amountDiv.className = `transaction-amount ${
@@ -393,24 +412,25 @@ function addTransactionDOM(transaction) {
   const actionsDiv = document.createElement("div");
   actionsDiv.className = "transaction-actions";
 
+  // Edit button
   const editButton = document.createElement("button");
   editButton.className = "action-btn edit-btn";
   editButton.setAttribute("title", "Edit Transaction");
   editButton.addEventListener("click", () => editTransaction(transaction.id));
 
+  editButton.innerHTML = `
+    <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+      <path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1-.11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/>
+    </svg>
+  `;
+
+  // Delete button
   const deleteButton = document.createElement("button");
   deleteButton.className = "action-btn delete-btn";
   deleteButton.setAttribute("title", "Delete Transaction");
   deleteButton.addEventListener("click", () =>
     removeTransaction(transaction.id)
   );
-
-  // SVG icon can still be added using innerHTML as it's not user-generated content
-  editButton.innerHTML = `
-    <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-      <path d="M15.502 1.94a1.5 1.5 0 0 1 0 2.121l-1.415 1.415-2.121-2.121 1.415-1.415a1.5 1.5 0 0 1 2.121 0zM14.086 5.373l-2.121-2.121L3.5 11.717V13.5h1.784l8.802-8.127z"/>
-    </svg>
-  `;
 
   deleteButton.innerHTML = `
     <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
@@ -419,17 +439,16 @@ function addTransactionDOM(transaction) {
     </svg>
   `;
 
+  // Add buttons to actions div
   actionsDiv.appendChild(editButton);
   actionsDiv.appendChild(deleteButton);
 
-  const rightSection = document.createElement("div");
-  rightSection.className = "transaction-right";
-  rightSection.appendChild(amountDiv);
-  rightSection.appendChild(actionsDiv);
-
+  // Assemble the transaction item
   item.appendChild(transactionInfo);
-  item.appendChild(rightSection);
+  item.appendChild(amountDiv);
+  item.appendChild(actionsDiv);
 
+  // Add to the transaction list
   transactionList.appendChild(item);
 }
 
@@ -472,6 +491,84 @@ function removeTransaction(id) {
     saveTransactions();
     applyDateFilter();
   }
+}
+
+// Edit transaction function (called when edit button is clicked)
+function editTransaction(id) {
+  // Find the transaction by id
+  const transaction = transactions.find((t) => t.id === id);
+  if (!transaction) return;
+
+  // Populate the form with transaction data
+  editTransactionId.value = transaction.id;
+  editTypeInput.value = transaction.type;
+
+  // Update category options based on transaction type
+  updateEditCategoryOptions(transaction.type);
+
+  // Set the correct category
+  editCategoryInput.value = transaction.category;
+
+  editDescriptionInput.value = transaction.description;
+  editAmountInput.value = transaction.amount;
+  editDateInput.value = transaction.date;
+
+  // Show the modal
+  editTransactionModal.style.display = "block";
+}
+
+// Update category options in the edit form based on transaction type
+function updateEditCategoryOptions(type) {
+  editCategoryInput.innerHTML = "";
+
+  categories[type].forEach((category) => {
+    const option = document.createElement("option");
+    option.value = category.id;
+    option.textContent = category.name;
+    option.setAttribute("data-type", type);
+    editCategoryInput.appendChild(option);
+  });
+}
+
+// Save the edited transaction
+function saveEditedTransaction(e) {
+  e.preventDefault();
+
+  // Validation
+  if (!editDescriptionInput.value.trim() || editAmountInput.value <= 0) {
+    alert("Please add a valid description and amount");
+    return;
+  }
+
+  const id = parseInt(editTransactionId.value);
+
+  // Find the index of the transaction in the array
+  const index = transactions.findIndex((t) => t.id === id);
+
+  if (index !== -1) {
+    // Update the transaction
+    transactions[index] = {
+      id: id,
+      type: editTypeInput.value,
+      category: editCategoryInput.value,
+      description: editDescriptionInput.value.trim(),
+      amount: parseFloat(editAmountInput.value),
+      date: editDateInput.value,
+    };
+
+    // Save to localStorage and update UI
+    saveTransactions();
+    applyDateFilter();
+
+    // Close the modal
+    closeEditTransactionModal();
+  }
+}
+
+// Close the edit transaction modal
+function closeEditTransactionModal() {
+  editTransactionModal.style.display = "none";
+  editTransactionForm.reset();
 }
 
 // Filter transaction display by tab
@@ -520,6 +617,7 @@ function updateFilteredUI() {
   transactionList.innerHTML = "";
   filteredTransactions.forEach(addTransactionDOM);
   updateValues();
+  updateCategoryChart();
 
   const activeTab = document.querySelector(".tab.active");
   if (activeTab) {
@@ -528,16 +626,128 @@ function updateFilteredUI() {
   }
 }
 
-// Show feedback message to user
-function showFeedback(message, type) {
-  feedbackMessage.textContent = message;
-  feedbackMessage.className = `feedback-message ${type}`;
-  feedbackMessage.style.display = "block";
+// Get data for category chart
+function getCategoryChartData(type) {
+  // Group transactions by category and sum amounts
+  const categoryData = {};
 
-  // Auto hide after 3 seconds
-  setTimeout(() => {
-    feedbackMessage.style.display = "none";
-  }, 3000);
+  // Filter by transaction type
+  const typeTransactions = filteredTransactions.filter((t) => t.type === type);
+
+  // If no transactions of this type, return empty data
+  if (typeTransactions.length === 0) {
+    return {
+      labels: ["No Data"],
+      datasets: [
+        {
+          data: [1],
+          backgroundColor: ["#e5e7eb"],
+          hoverOffset: 4,
+        },
+      ],
+    };
+  }
+
+  // Group by category and sum amounts
+  typeTransactions.forEach((transaction) => {
+    const categoryName = formatCategory(transaction.category);
+    if (categoryData[categoryName]) {
+      categoryData[categoryName] += transaction.amount;
+    } else {
+      categoryData[categoryName] = transaction.amount;
+    }
+  });
+
+  // Prepare data for chart
+  const labels = Object.keys(categoryData);
+  const data = Object.values(categoryData);
+
+  // Generate colors for each category
+  const colors = generateCategoryColors(labels.length, type);
+
+  return {
+    labels: labels,
+    datasets: [
+      {
+        data: data,
+        backgroundColor: colors,
+        hoverOffset: 4,
+      },
+    ],
+  };
+}
+
+// Generate colors for categories
+function generateCategoryColors(count, type) {
+  const baseColor =
+    type === "income"
+      ? { r: 16, g: 185, b: 129 } // Income green
+      : { r: 239, g: 68, b: 68 }; // Expense red
+
+  const colors = [];
+
+  for (let i = 0; i < count; i++) {
+    // Vary the opacity and slight color variation
+    const opacity = 0.5 + (i * 0.5) / count;
+    const variation = (i * 15) / count;
+
+    let r = Math.min(255, baseColor.r + variation);
+    let g = Math.min(255, baseColor.g + variation);
+    let b = Math.min(255, baseColor.b + variation);
+
+    colors.push(`rgba(${r}, ${g}, ${b}, ${opacity})`);
+  }
+
+  return colors;
+}
+
+// Setup event listeners for category chart tabs
+function setupCategoryChartTabs() {
+  // Update category chart on first load
+  updateCategoryChart();
+
+  chartTabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      // Update active class
+      chartTabs.forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+
+      // Update chart
+      const chartType = tab.getAttribute("data-chart");
+      updateCategoryChart(chartType);
+    });
+  });
+}
+
+// Update category chart based on selected type
+function updateCategoryChart(type) {
+  if (!myCategoryChart) return;
+
+  // If type not specified, use the currently active tab
+  if (!type) {
+    const activeTab = document.querySelector(".chart-tab.active");
+    if (activeTab) {
+      type = activeTab.getAttribute("data-chart");
+    } else {
+      type = "expense"; // Default
+    }
+  }
+
+  // Get the chart data
+  const chartData = getCategoryChartData(type);
+
+  // Update chart title
+  myCategoryChart.options.plugins.title.text =
+    type === "income" ? "Income Sources" : "Expense Breakdown by Category";
+
+  // Update chart data
+  myCategoryChart.data.labels = chartData.labels;
+  myCategoryChart.data.datasets[0].data = chartData.datasets[0].data;
+  myCategoryChart.data.datasets[0].backgroundColor =
+    chartData.datasets[0].backgroundColor;
+
+  // Update chart
+  myCategoryChart.update();
 }
 
 // Generate PDF
@@ -796,6 +1006,260 @@ function closePrintModal() {
   printModal.style.display = "none";
 }
 
+// Initialize custom category dropdown
+function initializeCustomCategoryDropdown() {
+  // Toggle dropdown on click
+  customSelectTrigger.addEventListener("click", function () {
+    customCategorySelect.classList.toggle("open");
+  });
+
+  // Close the dropdown when clicking outside
+  document.addEventListener("click", function (e) {
+    if (!customCategorySelect.contains(e.target)) {
+      customCategorySelect.classList.remove("open");
+    }
+  });
+
+  // Setup custom options based on transaction type selected
+  updateCustomCategoryOptions();
+}
+
+// Update custom category options in dropdown
+function updateCustomCategoryOptions() {
+  const selectedType = typeInput.value;
+
+  // Clear existing options
+  customOptions.innerHTML = "";
+
+  // Create options for each category
+  categories[selectedType].forEach((category) => {
+    const isDefault = defaultCategories[selectedType].some(
+      (c) => c.id === category.id
+    );
+
+    addCategoryToDropdown(category, selectedType, isDefault);
+  });
+
+  // Add "Add New Category" option at the bottom
+  const addNewOption = document.createElement("div");
+  addNewOption.className = "add-new-category";
+  addNewOption.innerHTML = `
+    <svg width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+      <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z" />
+    </svg>
+    Add New Category
+  `;
+  addNewOption.addEventListener("click", function (e) {
+    e.stopPropagation();
+    customCategorySelect.classList.remove("open");
+    showCategoryModal();
+  });
+
+  customOptions.appendChild(addNewOption);
+
+  // Ensure there's a default selection
+  if (categories[selectedType].length > 0) {
+    selectCategoryOption(
+      categories[selectedType][0].id,
+      categories[selectedType][0].name
+    );
+  } else {
+    selectedOptionText.textContent = "Select a category";
+  }
+}
+
+// Add a category to the custom dropdown
+function addCategoryToDropdown(category, type, isDefault = false) {
+  const optionItem = document.createElement("div");
+  optionItem.className = "option-item";
+  optionItem.dataset.value = category.id;
+  optionItem.dataset.type = type;
+
+  // Option content with text and action buttons
+  optionItem.innerHTML = `
+    <span class="option-text">${category.name}</span>
+    <div class="option-actions">
+      ${
+        !isDefault
+          ? `
+      <button class="option-action-btn edit-btn" title="Edit Category">
+        <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+          <path d="M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z"/>
+          <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5v11z"/>
+        </svg>
+      </button>
+      <button class="option-action-btn delete-btn" title="Delete Category">
+        <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+          <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
+          <path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
+        </svg>
+      </button>
+      `
+          : ""
+      }
+    </div>
+  `;
+
+  // Add click event for selecting the category option
+  optionItem.addEventListener("click", function () {
+    selectCategoryOption(category.id, category.name);
+    customCategorySelect.classList.remove("open");
+  });
+
+  // Add event handlers for edit and delete buttons if not a default category
+  if (!isDefault) {
+    const editButton = optionItem.querySelector(".edit-btn");
+    if (editButton) {
+      editButton.addEventListener("click", function (e) {
+        e.stopPropagation(); // Prevent option selection
+        showCategoryEditModal(category.id, category.name, type);
+      });
+    }
+
+    const deleteButton = optionItem.querySelector(".delete-btn");
+    if (deleteButton) {
+      deleteButton.addEventListener("click", function (e) {
+        e.stopPropagation(); // Prevent option selection
+        deleteCategoryFromDropdown(category.id, type);
+      });
+    }
+  }
+
+  customOptions.appendChild(optionItem);
+}
+
+// Set selected category in dropdown and hidden select
+function selectCategoryOption(value, text) {
+  // Update hidden select for form submission
+  categoryInput.value = value;
+
+  // Update visible custom select
+  selectedOptionText.textContent = text;
+
+  // Update selected class in options
+  const options = customOptions.querySelectorAll(".option-item");
+  options.forEach((option) => {
+    if (option.dataset.value === value) {
+      option.classList.add("selected");
+    } else {
+      option.classList.remove("selected");
+    }
+  });
+}
+
+// Show the edit modal for a category
+function showCategoryEditModal(id, name, type) {
+  // Store current category info for editing
+  currentCategoryId = id;
+  currentCategoryType = type;
+
+  // Position the edit modal relative to custom select
+  const selectRect = customCategorySelect.getBoundingClientRect();
+  categoryEditModal.style.top = `${selectRect.top + window.scrollY}px`;
+
+  // Set current value in input
+  editCategoryNameInput.value = name;
+
+  // Show the modal
+  categoryEditModal.style.display = "block";
+  editCategoryNameInput.focus();
+}
+
+// Save the edited category
+function saveEditedCategory() {
+  if (!editCategoryNameInput.value.trim() || !currentCategoryId) return;
+
+  const newName = editCategoryNameInput.value.trim();
+
+  // Find the category in the array
+  const categoryIndex = categories[currentCategoryType].findIndex(
+    (c) => c.id === currentCategoryId
+  );
+
+  if (categoryIndex !== -1) {
+    // Update the category name
+    categories[currentCategoryType][categoryIndex].name = newName;
+
+    // Save to localStorage
+    saveCategories();
+
+    // Update UI
+    updateCustomCategoryOptions();
+
+    // If in edit modal, update the categories list there too
+    loadCategories();
+
+    // Close the edit modal
+    hideCategoryEditModal();
+  }
+}
+
+// Hide the category edit modal
+function hideCategoryEditModal() {
+  categoryEditModal.style.display = "none";
+  currentCategoryId = null;
+  currentCategoryType = null;
+}
+
+// Delete a category from the dropdown
+function deleteCategoryFromDropdown(id, type) {
+  const categoryUsed = transactions.some((t) => t.category === id);
+
+  if (categoryUsed) {
+    alert("This category is used in transactions and cannot be deleted.");
+    return;
+  }
+
+  if (confirm("Are you sure you want to delete this category?")) {
+    // Remove the category from the array
+    categories[type] = categories[type].filter((c) => c.id !== id);
+
+    // Save to localStorage
+    saveCategories();
+
+    // Update UI
+    updateCustomCategoryOptions();
+
+    // If in edit modal, update the categories list there too
+    loadCategories();
+  }
+}
+
+// Show only relevant categories based on transaction type (update to use custom dropdown)
+function updateCategoryOptions() {
+  const selectedType = typeInput.value;
+
+  // Update the hidden select (still needed for form submission)
+  categoryInput.innerHTML = "";
+
+  categories[selectedType].forEach((category) => {
+    const option = document.createElement("option");
+    option.value = category.id;
+    option.textContent = category.name;
+    option.setAttribute("data-type", selectedType);
+    categoryInput.appendChild(option);
+  });
+
+  if (categoryInput.options.length > 0) {
+    categoryInput.options[0].selected = true;
+  }
+
+  // Update the custom dropdown options
+  updateCustomCategoryOptions();
+}
+
+// Event listeners for category edit modal
+saveEditedCategoryBtn.addEventListener("click", saveEditedCategory);
+cancelCategoryEditBtn.addEventListener("click", hideCategoryEditModal);
+
+// Edit category with Enter key
+editCategoryNameInput.addEventListener("keypress", function (e) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    saveEditedCategory();
+  }
+});
+
 // Initialize app
 function init() {
   transactionList.innerHTML = "";
@@ -804,6 +1268,8 @@ function init() {
   updateValues();
   loadCategories();
   setupFormToggle();
+  setupFilterHistoryToggle();
+  setupChartsToggle();
 }
 
 // Setup collapsible transaction form
@@ -840,23 +1306,87 @@ function setupFormToggle() {
   });
 }
 
-// Show only relevant categories based on transaction type
-function updateCategoryOptions() {
-  const selectedType = typeInput.value;
+// Setup collapsible filter-history container
+function setupFilterHistoryToggle() {
+  const filterHistoryHeader = document.querySelector(".filter-history-header");
+  const filterHistoryContent = document.querySelector(
+    ".filter-history-content"
+  );
+  const toggleBtn = document.getElementById("toggle-filter-history-btn");
+  const expandIcon = document.querySelector(".filter-expand-icon");
+  const collapseIcon = document.querySelector(".filter-collapse-icon");
 
-  categoryInput.innerHTML = "";
+  function toggleFilterHistory() {
+    const isExpanded = filterHistoryContent.classList.toggle("expanded");
 
-  categories[selectedType].forEach((category) => {
-    const option = document.createElement("option");
-    option.value = category.id;
-    option.textContent = category.name;
-    option.setAttribute("data-type", selectedType);
-    categoryInput.appendChild(option);
+    if (isExpanded) {
+      filterHistoryContent.style.display = "flex";
+      expandIcon.style.display = "none";
+      collapseIcon.style.display = "block";
+    } else {
+      // We can't just set display to 'none' immediately or the animation won't work
+      setTimeout(() => {
+        if (!filterHistoryContent.classList.contains("expanded")) {
+          filterHistoryContent.style.display = "none";
+        }
+      }, 300); // Match this with the CSS transition duration
+      expandIcon.style.display = "block";
+      collapseIcon.style.display = "none";
+    }
+  }
+
+  filterHistoryHeader.addEventListener("click", toggleFilterHistory);
+  toggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation(); // Prevent the click from triggering the filterHistoryHeader click event
+    toggleFilterHistory();
   });
 
-  if (categoryInput.options.length > 0) {
-    categoryInput.options[0].selected = true;
+  // Initially expand the filter-history container
+  toggleFilterHistory();
+}
+
+// Setup collapsible charts container
+function setupChartsToggle() {
+  const chartsHeader = document.querySelector(".charts-header");
+  const chartsContent = document.querySelector(".charts-content");
+  const toggleBtn = document.getElementById("toggle-charts-btn");
+  const expandIcon = document.querySelector(".charts-expand-icon");
+  const collapseIcon = document.querySelector(".charts-collapse-icon");
+
+  function toggleCharts() {
+    const isExpanded = chartsContent.classList.toggle("expanded");
+
+    if (isExpanded) {
+      chartsContent.style.display = "block";
+      expandIcon.style.display = "none";
+      collapseIcon.style.display = "block";
+
+      // Ensure the chart is properly rendered when expanded
+      if (myCategoryChart) {
+        setTimeout(() => {
+          myCategoryChart.resize();
+        }, 300);
+      }
+    } else {
+      // We can't just set display to 'none' immediately or the animation won't work
+      setTimeout(() => {
+        if (!chartsContent.classList.contains("expanded")) {
+          chartsContent.style.display = "none";
+        }
+      }, 300); // Match this with the CSS transition duration
+      expandIcon.style.display = "block";
+      collapseIcon.style.display = "none";
+    }
   }
+
+  chartsHeader.addEventListener("click", toggleCharts);
+  toggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation(); // Prevent the click from triggering the chartsHeader click event
+    toggleCharts();
+  });
+
+  // Initially expand the charts container
+  toggleCharts();
 }
 
 // Load categories into the modal lists
@@ -1051,13 +1581,44 @@ window.addEventListener("click", (e) => {
   }
 });
 
+// Event listener for edit transaction type change
+editTypeInput.addEventListener("change", () => {
+  updateEditCategoryOptions(editTypeInput.value);
+});
+
+// Event listener for edit transaction form submission
+editTransactionForm.addEventListener("submit", saveEditedTransaction);
+
+// Event listener for delete button in edit modal
+editDeleteBtn.addEventListener("click", () => {
+  const id = parseInt(editTransactionId.value);
+  removeTransaction(id);
+  closeEditTransactionModal();
+});
+
+// Event listener for cancel button in edit modal
+editCancelBtn.addEventListener("click", closeEditTransactionModal);
+
+// Event listener for close button in edit modal
+closeEditModal.addEventListener("click", closeEditTransactionModal);
+
+// Event listener for add category button in edit modal
+editAddCategoryBtn.addEventListener("click", showCategoryModal);
+
+// Close the edit modal when clicking outside
+window.addEventListener("click", (e) => {
+  if (e.target === editTransactionModal) {
+    closeEditTransactionModal();
+  }
+});
+
 // Initialize app on load
 document.addEventListener("DOMContentLoaded", () => {
   initializeChart();
   setDefaultDate();
   init();
+  initializeCustomCategoryDropdown();
 });
 
 // Create global functions
 window.removeTransaction = removeTransaction;
-window.editTransaction = editTransaction;

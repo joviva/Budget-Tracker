@@ -39,54 +39,6 @@
           <canvas id="budget-chart"></canvas>
         </div>
       </div>
-
-      <!-- Filter and History Container - Side by Side -->
-      <div class="filter-history-container">
-        <!-- Date Range Filter and Print Button -->
-        <div class="filter-controls">
-          <div class="date-filter">
-            <div class="form-group">
-              <label for="start-date">From:</label>
-              <input type="date" id="start-date" />
-            </div>
-            <div class="form-group">
-              <label for="end-date">To:</label>
-              <input type="date" id="end-date" />
-            </div>
-            <button id="apply-filter" class="btn btn-filter">
-              Apply Filter
-            </button>
-            <button id="reset-filter" class="btn btn-reset">Reset</button>
-          </div>
-          <button id="print-pdf" class="btn btn-print">
-            <svg
-              width="16"
-              height="16"
-              fill="currentColor"
-              viewBox="0 0 16 16"
-              style="margin-right: 5px">
-              <path d="M2.5 8a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1z" />
-              <path
-                d="M5 1a2 2 0 0 0-2 2v2H2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1v1a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-1h1a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-1V3a2 2 0 0 0-2-2H5zM4 3a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2H4V3zm1 5a2 2 0 0 0-2 2v1H2a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v-1a2 2 0 0 0-2-2H5zm7 2v3a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1z" />
-            </svg>
-            Print to PDF
-          </button>
-        </div>
-
-        <!-- Transaction History -->
-        <div class="history-container">
-          <h3>Transaction History</h3>
-          <div class="tabs">
-            <button class="tab active" data-tab="all">All</button>
-            <button class="tab" data-tab="income">Income</button>
-            <button class="tab" data-tab="expense">Expense</button>
-          </div>
-          <ul id="transaction-list" class="transaction-list">
-            <!-- Transactions will be added here dynamically -->
-          </ul>
-        </div>
-      </div>
-
       <!-- New Transaction Form (Collapsible) -->
       <div class="form-container collapsible">
         <div class="form-header">
@@ -125,10 +77,34 @@
             <div class="form-group">
               <label for="transaction-category">Category</label>
               <div class="category-container">
-                <select id="transaction-category" required>
+                <!-- Hidden select for form submission -->
+                <select
+                  id="transaction-category"
+                  required
+                  style="display: none">
                   <!-- Default categories will be loaded dynamically -->
-                  <option value="" disabled selected>Select a category</option>
                 </select>
+
+                <!-- Custom select with edit/delete buttons -->
+                <div class="custom-select-container">
+                  <div id="custom-category-select" class="custom-select">
+                    <div class="custom-select-trigger">
+                      <span class="selected-option">Select a category</span>
+                      <svg
+                        width="16"
+                        height="16"
+                        fill="currentColor"
+                        viewBox="0 0 16 16">
+                        <path
+                          d="M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z" />
+                      </svg>
+                    </div>
+                    <div class="custom-options">
+                      <!-- Categories will be added dynamically here -->
+                    </div>
+                  </div>
+                </div>
+
                 <button
                   type="button"
                   id="add-category-btn"
@@ -143,6 +119,28 @@
                       d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z" />
                   </svg>
                 </button>
+              </div>
+
+              <!-- Category edit modal for inline editing -->
+              <div id="category-edit-modal" class="category-edit-modal">
+                <div class="category-edit-form">
+                  <input
+                    type="text"
+                    id="edit-category-name-inline"
+                    placeholder="Category name" />
+                  <button
+                    type="button"
+                    class="btn btn-edit"
+                    id="save-edited-category">
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-cancel"
+                    id="cancel-category-edit">
+                    Cancel
+                  </button>
+                </div>
               </div>
             </div>
             <div class="form-group">
@@ -167,10 +165,125 @@
               <label for="transaction-date">Date</label>
               <input type="date" id="transaction-date" required />
             </div>
-            <button type="submit" id="transaction-submit" class="btn">
-              Add Transaction
-            </button>
+            <button type="submit" class="btn">Add Transaction</button>
           </form>
+        </div>
+      </div>
+
+      <!-- Enhanced Charts Section (Collapsible) -->
+      <div class="enhanced-charts-container collapsible">
+        <div class="charts-header">
+          <h3>Spending Analysis</h3>
+          <button type="button" id="toggle-charts-btn" class="btn-toggle">
+            <svg
+              width="16"
+              height="16"
+              fill="currentColor"
+              viewBox="0 0 16 16"
+              class="charts-expand-icon">
+              <path
+                d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z" />
+            </svg>
+            <svg
+              width="16"
+              height="16"
+              fill="currentColor"
+              viewBox="0 0 16 16"
+              class="charts-collapse-icon"
+              style="display: none">
+              <path
+                d="M4 8a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7A.5.5 0 0 1 4 8z" />
+            </svg>
+          </button>
+        </div>
+        <div class="charts-content" style="display: none">
+          <div class="chart-selection">
+            <button class="chart-tab active" data-chart="expense">
+              Expense Breakdown
+            </button>
+            <button class="chart-tab" data-chart="income">
+              Income Sources
+            </button>
+          </div>
+          <div class="category-chart-container">
+            <canvas id="category-chart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Filter and History Container - Side by Side (Collapsible) -->
+      <div class="filter-history-container collapsible">
+        <div class="filter-history-header">
+          <h3>Filters & Transaction History</h3>
+          <button
+            type="button"
+            id="toggle-filter-history-btn"
+            class="btn-toggle">
+            <svg
+              width="16"
+              height="16"
+              fill="currentColor"
+              viewBox="0 0 16 16"
+              class="filter-expand-icon">
+              <path
+                d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z" />
+            </svg>
+            <svg
+              width="16"
+              height="16"
+              fill="currentColor"
+              viewBox="0 0 16 16"
+              class="filter-collapse-icon"
+              style="display: none">
+              <path
+                d="M4 8a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7A.5.5 0 0 1 4 8z" />
+            </svg>
+          </button>
+        </div>
+        <div class="filter-history-content" style="display: none">
+          <!-- Date Range Filter and Print Button -->
+          <div class="filter-controls">
+            <div class="date-filter">
+              <div class="form-group">
+                <label for="start-date">From:</label>
+                <input type="date" id="start-date" />
+              </div>
+              <div class="form-group">
+                <label for="end-date">To:</label>
+                <input type="date" id="end-date" />
+              </div>
+              <button id="apply-filter" class="btn btn-filter">
+                Apply Filter
+              </button>
+              <button id="reset-filter" class="btn btn-reset">Reset</button>
+            </div>
+            <button id="print-pdf" class="btn btn-print">
+              <svg
+                width="16"
+                height="16"
+                fill="currentColor"
+                viewBox="0 0 16 16"
+                style="margin-right: 5px">
+                <path d="M2.5 8a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1z" />
+                <path
+                  d="M5 1a2 2 0 0 0-2 2v2H2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1v1a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-1h1a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-1V3a2 2 0 0 0-2-2H5zM4 3a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2H4V3zm1 5a2 2 0 0 0-2 2v1H2a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v-1a2 2 0 0 0-2-2H5zm7 2v3a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1z" />
+              </svg>
+              Print to PDF
+            </button>
+          </div>
+
+          <!-- Transaction History -->
+          <div class="history-container">
+            <h3>Transaction History</h3>
+            <div class="tabs">
+              <button class="tab active" data-tab="all">All</button>
+              <button class="tab" data-tab="income">Income</button>
+              <button class="tab" data-tab="expense">Expense</button>
+            </div>
+            <ul id="transaction-list" class="transaction-list">
+              <!-- Transactions will be added here dynamically -->
+            </ul>
+          </div>
         </div>
       </div>
 
@@ -226,6 +339,79 @@
             <button id="confirm-print" class="btn">Download PDF</button>
             <button id="cancel-print" class="btn btn-cancel">Cancel</button>
           </div>
+        </div>
+      </div>
+
+      <!-- Edit Transaction Modal -->
+      <div id="edit-transaction-modal" class="modal">
+        <div class="modal-content">
+          <span class="close-edit-modal">&times;</span>
+          <h2>Edit Transaction</h2>
+          <form id="edit-transaction-form">
+            <input type="hidden" id="edit-transaction-id" />
+            <div class="form-group">
+              <label for="edit-transaction-type">Type</label>
+              <select id="edit-transaction-type" required>
+                <option value="income">Income</option>
+                <option value="expense">Expense</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="edit-transaction-category">Category</label>
+              <div class="category-container">
+                <select id="edit-transaction-category" required>
+                  <!-- Categories will be loaded dynamically -->
+                </select>
+                <button
+                  type="button"
+                  id="edit-add-category-btn"
+                  class="btn btn-small"
+                  title="Add New Category">
+                  <svg
+                    width="14"
+                    height="14"
+                    fill="currentColor"
+                    viewBox="0 0 16 16">
+                    <path
+                      d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="edit-transaction-description">Description</label>
+              <input
+                type="text"
+                id="edit-transaction-description"
+                placeholder="Enter description"
+                required />
+            </div>
+            <div class="form-group">
+              <label for="edit-transaction-amount">Amount</label>
+              <input
+                type="number"
+                id="edit-transaction-amount"
+                min="0.01"
+                step="0.01"
+                placeholder="0.00"
+                required />
+            </div>
+            <div class="form-group">
+              <label for="edit-transaction-date">Date</label>
+              <input type="date" id="edit-transaction-date" required />
+            </div>
+            <div class="btn-row">
+              <button type="submit" class="btn btn-edit">
+                Update Transaction
+              </button>
+              <button type="button" class="btn btn-delete" id="edit-delete-btn">
+                Delete
+              </button>
+              <button type="button" class="btn btn-cancel" id="edit-cancel-btn">
+                Cancel
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     </div>
