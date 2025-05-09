@@ -338,6 +338,10 @@ function formatDate(dateString) {
 function addTransaction(e) {
   e.preventDefault();
 
+  const type = document.getElementById("transaction-type").value;
+  const incomeSource =
+    type === "expense" ? document.getElementById("income-source").value : null;
+
   // Validation
   if (!descriptionInput.value.trim() || amountInput.value <= 0) {
     alert("Please add a valid description and amount");
@@ -351,6 +355,7 @@ function addTransaction(e) {
     description: descriptionInput.value.trim(),
     amount: parseFloat(amountInput.value),
     date: dateInput.value,
+    incomeSource: incomeSource,
   };
 
   transactions.push(transaction);
@@ -1085,7 +1090,7 @@ function addCategoryToDropdown(category, type, isDefault = false) {
       <button class="option-action-btn edit-btn" title="Edit Category">
         <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
           <path d="M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z"/>
-          <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5v11z"/>
+          <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
         </svg>
       </button>
       <button class="option-action-btn delete-btn" title="Delete Category">
@@ -1280,6 +1285,12 @@ function setupFormToggle() {
   const expandIcon = document.querySelector(".expand-icon");
   const collapseIcon = document.querySelector(".collapse-icon");
 
+  // Ensure form is closed by default
+  formContent.classList.remove("expanded");
+  formContent.style.display = "none";
+  expandIcon.style.display = "block";
+  collapseIcon.style.display = "none";
+
   function toggleForm() {
     const isExpanded = formContent.classList.toggle("expanded");
 
@@ -1316,6 +1327,12 @@ function setupFilterHistoryToggle() {
   const expandIcon = document.querySelector(".filter-expand-icon");
   const collapseIcon = document.querySelector(".filter-collapse-icon");
 
+  // Ensure filter-history is closed by default
+  filterHistoryContent.classList.remove("expanded");
+  filterHistoryContent.style.display = "none";
+  expandIcon.style.display = "block";
+  collapseIcon.style.display = "none";
+
   function toggleFilterHistory() {
     const isExpanded = filterHistoryContent.classList.toggle("expanded");
 
@@ -1340,9 +1357,6 @@ function setupFilterHistoryToggle() {
     e.stopPropagation(); // Prevent the click from triggering the filterHistoryHeader click event
     toggleFilterHistory();
   });
-
-  // Initially expand the filter-history container
-  toggleFilterHistory();
 }
 
 // Setup collapsible charts container
@@ -1352,6 +1366,12 @@ function setupChartsToggle() {
   const toggleBtn = document.getElementById("toggle-charts-btn");
   const expandIcon = document.querySelector(".charts-expand-icon");
   const collapseIcon = document.querySelector(".charts-collapse-icon");
+
+  // Ensure charts are closed by default
+  chartsContent.classList.remove("expanded");
+  chartsContent.style.display = "none";
+  expandIcon.style.display = "block";
+  collapseIcon.style.display = "none";
 
   function toggleCharts() {
     const isExpanded = chartsContent.classList.toggle("expanded");
@@ -1384,9 +1404,6 @@ function setupChartsToggle() {
     e.stopPropagation(); // Prevent the click from triggering the chartsHeader click event
     toggleCharts();
   });
-
-  // Initially expand the charts container
-  toggleCharts();
 }
 
 // Load categories into the modal lists
@@ -1622,3 +1639,41 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Create global functions
 window.removeTransaction = removeTransaction;
+
+// Handle transaction type change to show/hide income source dropdown
+document.addEventListener("DOMContentLoaded", function () {
+  document
+    .getElementById("transaction-type")
+    .addEventListener("change", handleTransactionTypeChange);
+});
+
+function handleTransactionTypeChange() {
+  const transactionType = document.getElementById("transaction-type").value;
+  const incomeSourceContainer = document.getElementById(
+    "income-source-container"
+  );
+
+  if (transactionType === "expense") {
+    incomeSourceContainer.style.display = "block";
+    populateIncomeSourceDropdown();
+  } else {
+    incomeSourceContainer.style.display = "none";
+  }
+}
+
+function populateIncomeSourceDropdown() {
+  const dropdown = document.getElementById("income-source");
+  // Remove all options except the first
+  while (dropdown.options.length > 1) {
+    dropdown.remove(1);
+  }
+  // Use the correct categories object
+  const incomeCategories =
+    categories && categories.income ? categories.income : [];
+  incomeCategories.forEach((category) => {
+    const option = document.createElement("option");
+    option.value = category.id;
+    option.textContent = category.name;
+    dropdown.appendChild(option);
+  });
+}
