@@ -301,24 +301,57 @@ function saveTransactions() {
 
 // Update balance, income and expense
 function updateValues() {
-  // Use filtered transactions instead of all transactions
-  const income = filteredTransactions
-    .filter((transaction) => transaction.type === "income")
-    .reduce((acc, transaction) => acc + transaction.amount, 0);
+  // Get all income transactions
+  const incomeTransactions = filteredTransactions.filter(
+    (transaction) => transaction.type === "income"
+  );
 
+  // Calculate raw income (before adjustments)
+  const rawIncome = incomeTransactions.reduce(
+    (acc, transaction) => acc + transaction.amount,
+    0
+  );
+
+  // Calculate adjusted income (after expenses are deducted)
+  const adjustedIncome = incomeTransactions.reduce((acc, transaction) => {
+    // Start with the base amount
+    let totalAmount = transaction.amount;
+
+    // If there are adjustments, apply them
+    if (transaction.adjustments && transaction.adjustments.length > 0) {
+      const adjustmentsTotal = transaction.adjustments.reduce(
+        (adjAcc, adj) => adjAcc + adj.amount,
+        0
+      );
+      totalAmount += adjustmentsTotal;
+    }
+
+    return acc + totalAmount;
+  }, 0);
+
+  // Calculate total expense
   const expense = filteredTransactions
     .filter((transaction) => transaction.type === "expense")
     .reduce((acc, transaction) => acc + transaction.amount, 0);
 
-  const balance = income - expense;
+  // Split expenses into linked (those with an income source) and unlinked
+  const linkedExpenses = filteredTransactions
+    .filter(
+      (transaction) =>
+        transaction.type === "expense" && transaction.incomeSource
+    )
+    .reduce((acc, transaction) => acc + transaction.amount, 0);
 
+  const unlinkedExpenses = expense - linkedExpenses;
+  // For the total balance:
+  // We use the adjusted income (which already accounts for linked expenses)
+  // and subtract only the unlinked expenses
+  const balance = adjustedIncome - unlinkedExpenses;
   balanceEl.textContent = formatMoney(balance);
-  incomeEl.textContent = formatMoney(income);
-  expenseEl.textContent = formatMoney(expense);
-
-  // Update chart
+  incomeEl.textContent = formatMoney(rawIncome);
+  expenseEl.textContent = formatMoney(expense); // Update chart
   if (myChart) {
-    myChart.data.datasets[0].data = [income, expense];
+    myChart.data.datasets[0].data = [rawIncome, expense];
     myChart.update();
   }
 }
@@ -359,6 +392,52 @@ function addTransaction(e) {
   };
 
   transactions.push(transaction);
+
+  // If this is an expense and has an income source specified, update the transaction for that income source
+  if (type === "expense" && incomeSource) {
+    // Find the matching income transaction by category ID
+    const matchingIncomeTransaction = transactions.find(
+      (t) => t.type === "income" && t.category === incomeSource
+    );
+
+    // If no matching transaction found, create a new adjusted income entry
+    if (!matchingIncomeTransaction) {
+      // Get the income category name for the description
+      const incomeCategoryObj = categories.income.find(
+        (cat) => cat.id === incomeSource
+      );
+      const categoryName = incomeCategoryObj
+        ? incomeCategoryObj.name
+        : "Income Source";
+
+      // Create an adjusted income transaction that reflects the deduction
+      const adjustedIncome = {
+        id: generateID(),
+        type: "income",
+        category: incomeSource,
+        description: `Adjusted ${categoryName}`,
+        amount: -parseFloat(amountInput.value), // Negative to show it's been deducted
+        date: dateInput.value,
+        adjustedFrom: transaction.id, // Reference to the expense that caused this adjustment
+      };
+
+      transactions.push(adjustedIncome);
+    }
+    // If there is a matching income transaction, update it with an adjustment note
+    else {
+      const adjustmentNote = `Expense deducted: ${transaction.description}`;
+      if (!matchingIncomeTransaction.adjustments) {
+        matchingIncomeTransaction.adjustments = [];
+      }
+      matchingIncomeTransaction.adjustments.push({
+        amount: -parseFloat(amountInput.value),
+        description: adjustmentNote,
+        date: dateInput.value,
+        expenseId: transaction.id,
+      });
+    }
+  }
+
   saveTransactions();
   applyDateFilter();
 
@@ -383,6 +462,10 @@ function sanitizeHTML(text) {
 function addTransactionDOM(transaction) {
   const item = document.createElement("li");
   item.classList.add("transaction-item");
+  // Add class for transaction type to enable styling based on income/expense
+  item.classList.add(
+    transaction.type === "income" ? "income-item" : "expense-item"
+  );
   item.dataset.type = transaction.type;
   item.dataset.id = transaction.id;
 
@@ -398,6 +481,53 @@ function addTransactionDOM(transaction) {
   categoryDiv.className = "transaction-category";
   categoryDiv.textContent = formatCategory(transaction.category);
 
+  // If this is an expense with an income source, show the source
+  if (transaction.type === "expense" && transaction.incomeSource) {
+    const sourceDiv = document.createElement("div");
+    sourceDiv.className = "transaction-source";
+    sourceDiv.textContent = `From: ${formatCategory(transaction.incomeSource)}`;
+    categoryDiv.appendChild(sourceDiv);
+  }
+  // If this transaction has adjustments, show an indicator
+  if (transaction.adjustments && transaction.adjustments.length > 0) {
+    const adjustmentDiv = document.createElement("div");
+    adjustmentDiv.className = "transaction-adjustment-indicator";
+
+    const totalAdjustment = transaction.adjustments.reduce(
+      (total, adj) => total + adj.amount,
+      0
+    );
+    adjustmentDiv.textContent = `${transaction.adjustments.length} expense adjustment(s)`;
+
+    // Create a detailed tooltip that shows each adjustment
+    const tooltipDetails = transaction.adjustments
+      .map((adj) => {
+        const relatedExpense = transactions.find((t) => t.id === adj.expenseId);
+        const expenseDesc = relatedExpense
+          ? relatedExpense.description
+          : "Unknown expense";
+        return `${formatDate(adj.date)}: ${expenseDesc} (${formatMoney(
+          adj.amount
+        )})`;
+      })
+      .join("\n");
+
+    adjustmentDiv.title = `Original amount: ${formatMoney(
+      transaction.amount
+    )}\nAdjustments total: ${formatMoney(
+      totalAdjustment
+    )}\n\nDetails:\n${tooltipDetails}`;
+    categoryDiv.appendChild(adjustmentDiv);
+  }
+
+  // If this is an adjusted income entry
+  if (transaction.adjustedFrom) {
+    const adjustedDiv = document.createElement("div");
+    adjustedDiv.className = "transaction-adjusted";
+    adjustedDiv.textContent = "Adjustment";
+    categoryDiv.appendChild(adjustedDiv);
+  }
+
   const dateDiv = document.createElement("div");
   dateDiv.className = "transaction-date";
   dateDiv.textContent = formatDate(transaction.date);
@@ -405,14 +535,31 @@ function addTransactionDOM(transaction) {
   transactionInfo.appendChild(titleDiv);
   transactionInfo.appendChild(categoryDiv);
   transactionInfo.appendChild(dateDiv);
-
   const amountDiv = document.createElement("div");
   amountDiv.className = `transaction-amount ${
     transaction.type === "income" ? "income-amount" : "expense-amount"
   }`;
+  // Calculate displayed amount, accounting for adjustments
+  let displayAmount = transaction.amount;
+  let adjustmentText = "";
+
+  // If this is an income with adjustments, show the adjusted amount
+  if (
+    transaction.type === "income" &&
+    transaction.adjustments &&
+    transaction.adjustments.length > 0
+  ) {
+    const adjustmentsTotal = transaction.adjustments.reduce(
+      (adjAcc, adj) => adjAcc + adj.amount,
+      0
+    );
+    displayAmount += adjustmentsTotal;
+    adjustmentText = ` (${formatMoney(transaction.amount)} original)`;
+  }
+
   amountDiv.textContent = `${
     transaction.type === "income" ? "+" : "-"
-  } ${formatMoney(transaction.amount)}`;
+  } ${formatMoney(Math.abs(displayAmount))}${adjustmentText}`;
 
   const actionsDiv = document.createElement("div");
   actionsDiv.className = "transaction-actions";
@@ -428,14 +575,14 @@ function addTransactionDOM(transaction) {
       <path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1-.11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/>
     </svg>
   `;
-
   // Delete button
   const deleteButton = document.createElement("button");
   deleteButton.className = "action-btn delete-btn";
   deleteButton.setAttribute("title", "Delete Transaction");
-  deleteButton.addEventListener("click", () =>
-    removeTransaction(transaction.id)
-  );
+  deleteButton.addEventListener("click", (e) => {
+    e.preventDefault(); // Prevent any default browser behavior
+    removeTransaction(transaction.id);
+  });
 
   deleteButton.innerHTML = `
     <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
@@ -491,7 +638,50 @@ function formatCategory(category) {
 
 // Remove transaction
 function removeTransaction(id) {
-  if (confirm("Are you sure you want to delete this transaction?")) {
+  // Directly remove transaction without confirmation
+  const transactionToDelete = transactions.find((t) => t.id === id);
+
+  if (transactionToDelete) {
+    // If it's an expense with an income source, we need to update the related income adjustment
+    if (
+      transactionToDelete.type === "expense" &&
+      transactionToDelete.incomeSource
+    ) {
+      // Find any income transactions with adjustments related to this expense
+      const affectedIncomeTransactions = transactions.filter(
+        (t) =>
+          t.type === "income" &&
+          t.adjustments &&
+          t.adjustments.some((adj) => adj.expenseId === id)
+      );
+
+      // Remove the adjustment from each affected income transaction
+      affectedIncomeTransactions.forEach((incomeTransaction) => {
+        incomeTransaction.adjustments = incomeTransaction.adjustments.filter(
+          (adj) => adj.expenseId !== id
+        );
+
+        // If there are no more adjustments, remove the adjustments array
+        if (incomeTransaction.adjustments.length === 0) {
+          delete incomeTransaction.adjustments;
+        }
+      });
+
+      // Also delete any adjusted income entries specifically created for this expense
+      const adjustedIncomeIndices = [];
+      transactions.forEach((t, index) => {
+        if (t.type === "income" && t.adjustedFrom === id) {
+          adjustedIncomeIndices.push(index);
+        }
+      });
+
+      // Remove the adjusted income entries in reverse order to avoid index shifting
+      for (let i = adjustedIncomeIndices.length - 1; i >= 0; i--) {
+        transactions.splice(adjustedIncomeIndices[i], 1);
+      }
+    }
+
+    // Remove the transaction itself
     transactions = transactions.filter((transaction) => transaction.id !== id);
     saveTransactions();
     applyDateFilter();
@@ -518,6 +708,23 @@ function editTransaction(id) {
   editAmountInput.value = transaction.amount;
   editDateInput.value = transaction.date;
 
+  // If it's an expense with an income source, make sure to show the income source dropdown
+  if (transaction.type === "expense" && transaction.incomeSource) {
+    const editIncomeSourceContainer = document.getElementById(
+      "edit-income-source-container"
+    );
+    if (editIncomeSourceContainer) {
+      editIncomeSourceContainer.style.display = "block";
+
+      // Populate the income source dropdown
+      const editIncomeSource = document.getElementById("edit-income-source");
+      if (editIncomeSource) {
+        populateEditIncomeSourceDropdown();
+        editIncomeSource.value = transaction.incomeSource;
+      }
+    }
+  }
+
   // Show the modal
   editTransactionModal.style.display = "block";
 }
@@ -533,6 +740,19 @@ function updateEditCategoryOptions(type) {
     option.setAttribute("data-type", type);
     editCategoryInput.appendChild(option);
   });
+
+  // Show/hide income source selector based on transaction type
+  const editIncomeSourceContainer = document.getElementById(
+    "edit-income-source-container"
+  );
+  if (editIncomeSourceContainer) {
+    if (type === "expense") {
+      editIncomeSourceContainer.style.display = "block";
+      populateEditIncomeSourceDropdown();
+    } else {
+      editIncomeSourceContainer.style.display = "none";
+    }
+  }
 }
 
 // Save the edited transaction
@@ -551,6 +771,17 @@ function saveEditedTransaction(e) {
   const index = transactions.findIndex((t) => t.id === id);
 
   if (index !== -1) {
+    // Get the old transaction data before updating
+    const oldTransaction = transactions[index];
+
+    // Check if we're changing the amount of an expense that's linked to an income source
+    let adjustmentNeedsUpdate = false;
+    let oldIncomeSource = null;
+
+    if (oldTransaction.type === "expense" && oldTransaction.incomeSource) {
+      oldIncomeSource = oldTransaction.incomeSource;
+      adjustmentNeedsUpdate = true;
+    }
     // Update the transaction
     transactions[index] = {
       id: id,
@@ -560,6 +791,63 @@ function saveEditedTransaction(e) {
       amount: parseFloat(editAmountInput.value),
       date: editDateInput.value,
     };
+
+    // Handle income source for expenses
+    if (editTypeInput.value === "expense") {
+      // Get the current selected income source
+      const editIncomeSource = document.getElementById("edit-income-source");
+      const newIncomeSource = editIncomeSource ? editIncomeSource.value : null;
+
+      // If we have a new income source or we had one before, use it
+      if (newIncomeSource) {
+        transactions[index].incomeSource = newIncomeSource;
+      } else if (oldIncomeSource) {
+        transactions[index].incomeSource = oldIncomeSource;
+      }
+    }
+
+    // If this was an expense tied to an income source, update the corresponding adjustment
+    if (adjustmentNeedsUpdate) {
+      // Find any income transactions with adjustments related to this expense
+      const affectedIncomeTransactions = transactions.filter(
+        (t) =>
+          t.type === "income" &&
+          t.adjustments &&
+          t.adjustments.some((adj) => adj.expenseId === id)
+      );
+
+      affectedIncomeTransactions.forEach((incomeTransaction) => {
+        const adjIndex = incomeTransaction.adjustments.findIndex(
+          (adj) => adj.expenseId === id
+        );
+        if (adjIndex !== -1) {
+          // Update the adjustment amount based on the new expense amount
+          const oldAdjustment = incomeTransaction.adjustments[adjIndex];
+          incomeTransaction.adjustments[adjIndex] = {
+            ...oldAdjustment,
+            amount: -parseFloat(editAmountInput.value),
+            description: `Expense deducted: ${editDescriptionInput.value.trim()}`,
+            date: editDateInput.value,
+          };
+        }
+      });
+
+      // Handle adjusted income entries that were created specifically for this expense
+      const adjustedIncomeIndex = transactions.findIndex(
+        (t) => t.type === "income" && t.adjustedFrom === id
+      );
+
+      if (adjustedIncomeIndex !== -1) {
+        // Update the adjusted income transaction
+        transactions[adjustedIncomeIndex].amount = -parseFloat(
+          editAmountInput.value
+        );
+        transactions[adjustedIncomeIndex].date = editDateInput.value;
+        transactions[
+          adjustedIncomeIndex
+        ].description = `Adjusted ${formatCategory(oldIncomeSource)}`;
+      }
+    }
 
     // Save to localStorage and update UI
     saveTransactions();
@@ -595,6 +883,7 @@ function applyDateFilter() {
     ? new Date(startDateInput.value)
     : null;
   const endDate = endDateInput.value ? new Date(endDateInput.value) : null;
+  const filterControls = document.querySelector(".filter-controls");
 
   if (startDate && endDate) {
     endDate.setDate(endDate.getDate() + 1);
@@ -603,8 +892,18 @@ function applyDateFilter() {
       const transDate = new Date(transaction.date);
       return transDate >= startDate && transDate < endDate;
     });
+
+    // Add visual indicator that filters are active
+    if (filterControls) {
+      filterControls.classList.add("active");
+    }
   } else {
     filteredTransactions = [...transactions];
+
+    // Remove active indicator when no filters are applied
+    if (filterControls) {
+      filterControls.classList.remove("active");
+    }
   }
 
   updateFilteredUI();
@@ -614,13 +913,60 @@ function applyDateFilter() {
 function resetDateFilter() {
   setDefaultDate();
   filteredTransactions = [...transactions];
+
+  // Remove active indicator when filters are reset
+  const filterControls = document.querySelector(".filter-controls");
+  if (filterControls) {
+    filterControls.classList.remove("active");
+  }
+
   updateFilteredUI();
 }
 
 // Update UI with filtered transactions
 function updateFilteredUI() {
   transactionList.innerHTML = "";
-  filteredTransactions.forEach(addTransactionDOM);
+
+  // If there are no filtered transactions, show empty state
+  if (filteredTransactions.length === 0) {
+    // Create and add empty state to transaction list
+    const emptyState = document.createElement("div");
+    emptyState.className = "empty-state";
+
+    const emptyStateIcon = document.createElement("div");
+    emptyStateIcon.className = "empty-state-icon";
+    emptyStateIcon.textContent = "📊";
+
+    const emptyMessage = document.createElement("div");
+    emptyMessage.className = "empty-state-message";
+    emptyMessage.textContent = "No transactions found";
+
+    const activeTab = document.querySelector(".tab.active");
+    const filterType = activeTab ? activeTab.getAttribute("data-tab") : "all";
+
+    const emptyHint = document.createElement("div");
+    emptyHint.className = "empty-state-hint";
+
+    if (startDateInput.value && endDateInput.value) {
+      emptyHint.textContent = `No ${
+        filterType !== "all" ? filterType : ""
+      } transactions found in the selected date range. Try adjusting your filters.`;
+    } else {
+      emptyHint.textContent = `Start by adding your first ${
+        filterType !== "all" ? filterType : ""
+      } transaction using the "Add New Transaction" form.`;
+    }
+
+    emptyState.appendChild(emptyStateIcon);
+    emptyState.appendChild(emptyMessage);
+    emptyState.appendChild(emptyHint);
+
+    transactionList.appendChild(emptyState);
+  } else {
+    // Add transactions to the list
+    filteredTransactions.forEach(addTransactionDOM);
+  }
+
   updateValues();
   updateCategoryChart();
 
@@ -652,14 +998,28 @@ function getCategoryChartData(type) {
       ],
     };
   }
-
   // Group by category and sum amounts
   typeTransactions.forEach((transaction) => {
     const categoryName = formatCategory(transaction.category);
+    let amount = transaction.amount;
+
+    // Include adjustments in the total for income transactions
+    if (
+      transaction.type === "income" &&
+      transaction.adjustments &&
+      transaction.adjustments.length > 0
+    ) {
+      const adjustmentsTotal = transaction.adjustments.reduce(
+        (total, adj) => total + adj.amount,
+        0
+      );
+      amount += adjustmentsTotal;
+    }
+
     if (categoryData[categoryName]) {
-      categoryData[categoryName] += transaction.amount;
+      categoryData[categoryName] += amount;
     } else {
-      categoryData[categoryName] = transaction.amount;
+      categoryData[categoryName] = amount;
     }
   });
 
@@ -782,7 +1142,21 @@ function generatePDF() {
 
   const income = filteredTransactions
     .filter((transaction) => transaction.type === "income")
-    .reduce((acc, transaction) => acc + transaction.amount, 0);
+    .reduce((acc, transaction) => {
+      // Add the base transaction amount
+      let totalAmount = transaction.amount;
+
+      // If there are adjustments, add them to the total
+      if (transaction.adjustments && transaction.adjustments.length > 0) {
+        const adjustmentsTotal = transaction.adjustments.reduce(
+          (adjAcc, adj) => adjAcc + adj.amount,
+          0
+        );
+        totalAmount += adjustmentsTotal;
+      }
+
+      return acc + totalAmount;
+    }, 0);
 
   const expense = filteredTransactions
     .filter((transaction) => transaction.type === "expense")
@@ -815,18 +1189,45 @@ function generatePDF() {
   doc.setFontSize(12);
   doc.setTextColor(0);
   doc.text("Transactions", 14, doc.lastAutoTable.finalY + 10);
+  const tableData = filteredTransactions.map((transaction) => {
+    // Calculate displayed amount, accounting for adjustments
+    let displayAmount = transaction.amount;
+    let notes = "";
 
-  const tableData = filteredTransactions.map((transaction) => [
-    formatDate(transaction.date),
-    transaction.description,
-    formatCategory(transaction.category),
-    transaction.type,
-    formatMoney(transaction.amount),
-  ]);
+    // Handle adjustments for income transactions
+    if (
+      transaction.type === "income" &&
+      transaction.adjustments &&
+      transaction.adjustments.length > 0
+    ) {
+      const adjustmentsTotal = transaction.adjustments.reduce(
+        (adjAcc, adj) => adjAcc + adj.amount,
+        0
+      );
+      displayAmount += adjustmentsTotal;
+      notes = `Original: ${formatMoney(
+        transaction.amount
+      )}, Adjusted by expenses`;
+    }
 
+    // Add income source info for expenses
+    if (transaction.type === "expense" && transaction.incomeSource) {
+      const sourceName = formatCategory(transaction.incomeSource);
+      notes = `Deducted from: ${sourceName}`;
+    }
+
+    return [
+      formatDate(transaction.date),
+      transaction.description,
+      formatCategory(transaction.category),
+      transaction.type.charAt(0).toUpperCase() + transaction.type.slice(1),
+      formatMoney(displayAmount),
+      notes,
+    ];
+  });
   doc.autoTable({
     startY: doc.lastAutoTable.finalY + 15,
-    head: [["Date", "Description", "Category", "Type", "Amount"]],
+    head: [["Date", "Description", "Category", "Type", "Amount", "Notes"]],
     body: tableData,
     theme: "grid",
     headStyles: {
@@ -835,6 +1236,9 @@ function generatePDF() {
     },
     alternateRowStyles: {
       fillColor: [240, 244, 248],
+    },
+    columnStyles: {
+      5: { cellWidth: "auto" }, // Make the Notes column adjust to content
     },
   });
 
@@ -1275,6 +1679,7 @@ function init() {
   setupFormToggle();
   setupFilterHistoryToggle();
   setupChartsToggle();
+  handleMobileLayout(); // Initialize mobile layout adjustments
 }
 
 // Setup collapsible transaction form
@@ -1332,12 +1737,13 @@ function setupFilterHistoryToggle() {
   filterHistoryContent.style.display = "none";
   expandIcon.style.display = "block";
   collapseIcon.style.display = "none";
-
   function toggleFilterHistory() {
     const isExpanded = filterHistoryContent.classList.toggle("expanded");
+    const isMobile = window.innerWidth <= 768;
 
     if (isExpanded) {
-      filterHistoryContent.style.display = "flex";
+      // Use display block for mobile to ensure proper column layout
+      filterHistoryContent.style.display = isMobile ? "block" : "flex";
       expandIcon.style.display = "none";
       collapseIcon.style.display = "block";
     } else {
@@ -1532,10 +1938,63 @@ function switchCategoryTab(type) {
   }
 }
 
+// Handle mobile view adjustments
+function handleMobileLayout() {
+  const filterHistoryContent = document.querySelector(
+    ".filter-history-content"
+  );
+
+  // If the filter-history is expanded, make sure it has the right display property
+  if (filterHistoryContent.classList.contains("expanded")) {
+    const isMobile = window.innerWidth <= 768;
+    filterHistoryContent.style.display = isMobile ? "block" : "flex";
+  }
+}
+
+// Setup the scroll-to-top button for transaction list
+function setupScrollToTopButton() {
+  const transactionList = document.getElementById("transaction-list");
+  const scrollTopBtn = document.getElementById("scroll-top-btn");
+
+  if (!transactionList || !scrollTopBtn) return;
+
+  // Show/hide the button based on scroll position
+  transactionList.addEventListener("scroll", () => {
+    if (transactionList.scrollTop > 100) {
+      scrollTopBtn.classList.add("visible");
+    } else {
+      scrollTopBtn.classList.remove("visible");
+    }
+  });
+
+  // Scroll to top when clicking the button
+  scrollTopBtn.addEventListener("click", () => {
+    transactionList.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  });
+}
+
+// Setup mobile floating action button
+function setupFloatingActionButton() {
+  // This function is kept as a placeholder to avoid breaking any code that calls it,
+  // but its functionality has been removed as the floating button is no longer needed
+  return;
+}
+
 // Event listeners
 transactionForm.addEventListener("submit", addTransaction);
 
 typeInput.addEventListener("change", updateCategoryOptions);
+
+// Add event listener for edit transaction type change
+editTypeInput.addEventListener("change", function () {
+  updateEditCategoryOptions(this.value);
+});
+
+// Add resize event listener for mobile layout adjustments
+window.addEventListener("resize", handleMobileLayout);
 
 tabs.forEach((tab) => {
   tab.addEventListener("click", () => {
@@ -1635,6 +2094,8 @@ document.addEventListener("DOMContentLoaded", () => {
   setDefaultDate();
   init();
   initializeCustomCategoryDropdown();
+  setupScrollToTopButton();
+  setupFloatingActionButton();
 });
 
 // Create global functions
@@ -1667,6 +2128,26 @@ function populateIncomeSourceDropdown() {
   while (dropdown.options.length > 1) {
     dropdown.remove(1);
   }
+  // Use the correct categories object
+  const incomeCategories =
+    categories && categories.income ? categories.income : [];
+  incomeCategories.forEach((category) => {
+    const option = document.createElement("option");
+    option.value = category.id;
+    option.textContent = category.name;
+    dropdown.appendChild(option);
+  });
+}
+
+// Function to populate the edit income source dropdown
+function populateEditIncomeSourceDropdown() {
+  const dropdown = document.getElementById("edit-income-source");
+
+  // Remove all options except the first
+  while (dropdown.options.length > 1) {
+    dropdown.remove(1);
+  }
+
   // Use the correct categories object
   const incomeCategories =
     categories && categories.income ? categories.income : [];
