@@ -1,3 +1,152 @@
+// Budget Tracker — all app logic in this one classic script (no modules), so
+// the app keeps working when index.html is opened directly from file://.
+//
+// Pure, DOM-free helpers come first; UI wiring starts below.
+
+// Format number as money, e.g. 1234.5 -> "$1,234.50"
+function formatMoney(amount) {
+  return "$" + amount.toFixed(2).replace(/\d(?=(\d{3})+\.)/g, "$&,");
+}
+
+// Format date for display. "YYYY-MM-DD" strings are parsed manually so the
+// day never shifts in timezones behind UTC (new Date() would treat the
+// string as UTC midnight).
+function formatDate(dateString) {
+  const [year, month, day] = dateString.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  const options = { year: "numeric", month: "short", day: "numeric" };
+  return date.toLocaleDateString(undefined, options);
+}
+
+// Generate a unique ID, preferring UUIDs where the runtime provides them
+function generateID() {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+// Compute every total shown in the dashboard, the print preview and the PDF
+// from the same list of transactions.
+//
+// An expense may link to an income source via `incomeSource`, but that link
+// is metadata only: it never changes the totals. Balance is always income
+// minus expenses, so a linked expense can never be counted twice.
+function computeTotals(transactions) {
+  let income = 0;
+  let expense = 0;
+  let linkedExpenses = 0;
+
+  for (const transaction of transactions) {
+    if (transaction.type === "income") {
+      income += transaction.amount;
+    } else {
+      expense += transaction.amount;
+      if (transaction.incomeSource) {
+        linkedExpenses += transaction.amount;
+      }
+    }
+  }
+
+  return {
+    income,
+    expense,
+    balance: income - expense,
+    linkedExpenses,
+    unlinkedExpenses: expense - linkedExpenses,
+  };
+}
+
+// Filter transactions by an inclusive date range. `startDate` and `endDate`
+// are "YYYY-MM-DD" strings; an empty bound leaves that side of the range open.
+function filterByDateRange(transactions, startDate, endDate) {
+  return transactions.filter((transaction) => {
+    if (startDate && transaction.date < startDate) {
+      return false;
+    }
+    if (endDate && transaction.date > endDate) {
+      return false;
+    }
+    return true;
+  });
+}
+
+// Format a Date as a local "YYYY-MM-DD" string (toISOString would shift
+// the day in timezones behind UTC)
+function toLocalDateString(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+// The year-to-date window: January 1st of the reference date's year up to
+// and including the reference date
+function yearToDateRange(referenceDate = new Date()) {
+  return {
+    startDate: `${referenceDate.getFullYear()}-01-01`,
+    endDate: toLocalDateString(referenceDate),
+  };
+}
+
+// Compute an inclusive "YYYY-MM-DD" date range for a named window:
+// "month" (1st of the month to the reference date), "year" (year to date)
+// or "all" (unbounded, both sides null).
+function windowRange(windowName, referenceDate = new Date()) {
+  if (windowName === "month") {
+    return {
+      startDate: toLocalDateString(
+        new Date(referenceDate.getFullYear(), referenceDate.getMonth(), 1)
+      ),
+      endDate: toLocalDateString(referenceDate),
+    };
+  }
+  if (windowName === "year") {
+    return yearToDateRange(referenceDate);
+  }
+  return { startDate: null, endDate: null };
+}
+
+// Summarize transactions of `type` ("income" / "expense") by description
+// within an inclusive "YYYY-MM-DD" date range. Descriptions are grouped
+// case-insensitively and listed with the spelling of their most recent
+// transaction, sorted by total (largest first).
+function summarizeByDescription(transactions, type, startDate, endDate) {
+  const groups = new Map();
+
+  for (const transaction of filterByDateRange(
+    transactions,
+    startDate,
+    endDate
+  )) {
+    if (transaction.type !== type) continue;
+
+    const description = transaction.description.trim();
+    const key = description.toLowerCase();
+    const group = groups.get(key) || {
+      description,
+      count: 0,
+      total: 0,
+      lastDate: "",
+    };
+
+    group.count += 1;
+    group.total += transaction.amount;
+    if (transaction.date >= group.lastDate) {
+      group.description = description;
+      group.lastDate = transaction.date;
+    }
+    groups.set(key, group);
+  }
+
+  return Array.from(groups.values())
+    .map(({ description, count, total }) => ({ description, count, total }))
+    .sort((a, b) => b.total - a.total);
+}
+
 // DOM Elements
 const balanceEl = document.getElementById("balance");
 const incomeEl = document.getElementById("income-total");
@@ -10,6 +159,10 @@ const amountInput = document.getElementById("transaction-amount");
 const dateInput = document.getElementById("transaction-date");
 const transactionList = document.getElementById("transaction-list");
 const tabs = document.querySelectorAll(".tab");
+const clearDataBtn = document.getElementById("clear-data-btn");
+const exportDataBtn = document.getElementById("export-data-btn");
+const importDataBtn = document.getElementById("import-data-btn");
+const importDataInput = document.getElementById("import-data-input");
 const budgetChart = document.getElementById("budget-chart");
 const categoryChart = document.getElementById("category-chart");
 const chartTabs = document.querySelectorAll(".chart-tab");
@@ -26,12 +179,12 @@ const printModal = document.getElementById("print-modal");
 const closeModal = document.querySelector(".close-modal");
 const confirmPrintBtn = document.getElementById("confirm-print");
 const cancelPrintBtn = document.getElementById("cancel-print");
-const previewContent = document.getElementById("print-preview-content");
 const previewSummary = document.getElementById("preview-summary");
 const previewTransactions = document.getElementById("preview-transactions");
 
 // Category Management Elements
 const addCategoryBtn = document.getElementById("add-category-btn");
+const deleteCategoryBtn = document.getElementById("delete-category-btn");
 const categoryModal = document.getElementById("category-modal");
 const closeCategoryModal = document.querySelector(".close-category-modal");
 const categoryTabs = document.querySelectorAll(".category-tab");
@@ -77,6 +230,81 @@ const cancelCategoryEditBtn = document.getElementById("cancel-category-edit");
 let currentCategoryId = null;
 let currentCategoryType = null;
 
+// Modal accessibility helpers
+const openModals = [];
+
+function getFocusableElements(container) {
+  return Array.from(
+    container.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+  ).filter((el) => el.offsetParent !== null);
+}
+
+// Open a modal dialog, moving focus inside it and remembering where focus
+// came from so it can be restored when the modal closes
+function openModal(modal, focusTarget) {
+  openModals.push({ modal, returnFocus: document.activeElement });
+  modal.style.display = "block";
+
+  const target = focusTarget || getFocusableElements(modal)[0];
+  if (target) {
+    target.focus();
+  }
+}
+
+// Close a modal dialog and restore focus to the element that opened it
+function closeModalElement(modal) {
+  modal.style.display = "none";
+
+  const index = openModals.findIndex((entry) => entry.modal === modal);
+  if (index === -1) return;
+
+  const [{ returnFocus }] = openModals.splice(index, 1);
+  if (
+    returnFocus &&
+    typeof returnFocus.focus === "function" &&
+    document.contains(returnFocus)
+  ) {
+    returnFocus.focus();
+  }
+}
+
+function getTopModal() {
+  return openModals.length > 0 ? openModals[openModals.length - 1].modal : null;
+}
+
+// Trap Tab focus inside the open modal and allow Escape to close it
+document.addEventListener("keydown", (e) => {
+  const topModal = getTopModal();
+  if (!topModal) return;
+
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeModalElement(topModal);
+    return;
+  }
+
+  if (e.key !== "Tab") return;
+
+  const focusables = getFocusableElements(topModal);
+  if (focusables.length === 0) return;
+
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  } else if (!topModal.contains(document.activeElement)) {
+    e.preventDefault();
+    first.focus();
+  }
+});
+
 // Default categories
 const defaultCategories = {
   income: [
@@ -95,14 +323,45 @@ const defaultCategories = {
   ],
 };
 
-// Load categories from localStorage or use defaults
+// Safely read and parse a localStorage entry, falling back to a default value
+// when the entry is missing or contains invalid JSON
+function loadFromStorage(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : JSON.parse(raw);
+  } catch (error) {
+    console.warn(`Ignoring invalid localStorage entry "${key}":`, error);
+    return fallback;
+  }
+}
+
+// Load categories from localStorage, or use a copy of the defaults. The copy
+// matters: sharing the defaultCategories object would let newly added
+// categories mutate the defaults list, hiding their edit/remove buttons.
+const storedCategories = loadFromStorage("budgetCategories", null);
 let categories =
-  JSON.parse(localStorage.getItem("budgetCategories")) || defaultCategories;
+  storedCategories &&
+  Array.isArray(storedCategories.income) &&
+  Array.isArray(storedCategories.expense)
+    ? storedCategories
+    : {
+        income: defaultCategories.income.map((c) => ({ ...c })),
+        expense: defaultCategories.expense.map((c) => ({ ...c })),
+      };
 
 // Save categories to localStorage
 function saveCategories() {
   localStorage.setItem("budgetCategories", JSON.stringify(categories));
 }
+
+// Time window currently selected in the spending analysis
+let analysisWindow = "year";
+
+const WINDOW_LABELS = {
+  month: "This month",
+  year: "Year to date",
+  all: "All time",
+};
 
 // Initialize Chart
 let myChart;
@@ -279,19 +538,43 @@ function handleChartResize() {
 // Initialize date inputs
 function setDefaultDate() {
   const today = new Date();
-  const formattedDate = today.toISOString().split("T")[0];
-  dateInput.value = formattedDate;
+  dateInput.value = toLocalDateString(today);
 
   // Set default date range filter to the current month
   const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-  const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
 
-  startDateInput.value = firstDay.toISOString().split("T")[0];
-  endDateInput.value = today.toISOString().split("T")[0];
+  startDateInput.value = toLocalDateString(firstDay);
+  endDateInput.value = toLocalDateString(today);
+}
+
+// Normalize a stored transaction for the current data model:
+// - IDs are compared as strings, so legacy numeric IDs are converted
+// - rows generated by the old "income adjustment" bookkeeping are dropped
+// - the legacy `adjustments` arrays are dropped; the link between an expense
+//   and its income source lives on the expense itself (`incomeSource`) and
+//   everything else is derived in computeTotals()
+function normalizeTransaction(transaction) {
+  if (
+    !transaction ||
+    typeof transaction !== "object" ||
+    transaction.id == null
+  ) {
+    return null;
+  }
+  if (transaction.adjustedFrom != null) {
+    return null;
+  }
+
+  const normalized = { ...transaction, id: String(transaction.id) };
+  delete normalized.adjustments;
+  return normalized;
 }
 
 // Load transactions from localStorage
-let transactions = JSON.parse(localStorage.getItem("transactions")) || [];
+const storedTransactions = loadFromStorage("transactions", []);
+let transactions = (Array.isArray(storedTransactions) ? storedTransactions : [])
+  .map(normalizeTransaction)
+  .filter(Boolean);
 let filteredTransactions = [...transactions];
 
 // Save transactions to localStorage
@@ -299,79 +582,27 @@ function saveTransactions() {
   localStorage.setItem("transactions", JSON.stringify(transactions));
 }
 
-// Update balance, income and expense
+// Update balance, income and expense.
+// All totals come from computeTotals() so the dashboard, the print preview
+// and the PDF always show the same numbers.
 function updateValues() {
-  // Get all income transactions
-  const incomeTransactions = filteredTransactions.filter(
-    (transaction) => transaction.type === "income"
-  );
+  const { income, expense, balance } = computeTotals(filteredTransactions);
 
-  // Calculate raw income (before adjustments)
-  const rawIncome = incomeTransactions.reduce(
-    (acc, transaction) => acc + transaction.amount,
-    0
-  );
-
-  // Calculate adjusted income (after expenses are deducted)
-  const adjustedIncome = incomeTransactions.reduce((acc, transaction) => {
-    // Start with the base amount
-    let totalAmount = transaction.amount;
-
-    // If there are adjustments, apply them
-    if (transaction.adjustments && transaction.adjustments.length > 0) {
-      const adjustmentsTotal = transaction.adjustments.reduce(
-        (adjAcc, adj) => adjAcc + adj.amount,
-        0
-      );
-      totalAmount += adjustmentsTotal;
-    }
-
-    return acc + totalAmount;
-  }, 0);
-
-  // Calculate total expense
-  const expense = filteredTransactions
-    .filter((transaction) => transaction.type === "expense")
-    .reduce((acc, transaction) => acc + transaction.amount, 0);
-
-  // Split expenses into linked (those with an income source) and unlinked
-  const linkedExpenses = filteredTransactions
-    .filter(
-      (transaction) =>
-        transaction.type === "expense" && transaction.incomeSource
-    )
-    .reduce((acc, transaction) => acc + transaction.amount, 0);
-
-  const unlinkedExpenses = expense - linkedExpenses;
-  // For the total balance:
-  // We use the adjusted income (which already accounts for linked expenses)
-  // and subtract only the unlinked expenses
-  const balance = adjustedIncome - unlinkedExpenses;
   balanceEl.textContent = formatMoney(balance);
-  incomeEl.textContent = formatMoney(rawIncome);
-  expenseEl.textContent = formatMoney(expense); // Update chart
+  incomeEl.textContent = formatMoney(income);
+  expenseEl.textContent = formatMoney(expense);
+  // Update chart
   if (myChart) {
-    myChart.data.datasets[0].data = [rawIncome, expense];
+    myChart.data.datasets[0].data = [income, expense];
     myChart.update();
   }
-}
-
-// Format number as money
-function formatMoney(amount) {
-  return "$" + amount.toFixed(2).replace(/\d(?=(\d{3})+\.)/g, "$&,");
-}
-
-// Format date for display
-function formatDate(dateString) {
-  const options = { year: "numeric", month: "short", day: "numeric" };
-  return new Date(dateString).toLocaleDateString(undefined, options);
 }
 
 // Add new transaction
 function addTransaction(e) {
   e.preventDefault();
 
-  const type = document.getElementById("transaction-type").value;
+  const type = typeInput.value;
   const incomeSource =
     type === "expense" ? document.getElementById("income-source").value : null;
 
@@ -381,9 +612,12 @@ function addTransaction(e) {
     return;
   }
 
+  // Expenses may link to an income source, but this is metadata only:
+  // all totals are derived from the transactions themselves in
+  // computeTotals(), so nothing else needs to be updated here.
   const transaction = {
     id: generateID(),
-    type: typeInput.value,
+    type: type,
     category: categoryInput.value,
     description: descriptionInput.value.trim(),
     amount: parseFloat(amountInput.value),
@@ -393,62 +627,15 @@ function addTransaction(e) {
 
   transactions.push(transaction);
 
-  // If this is an expense and has an income source specified, update the transaction for that income source
-  if (type === "expense" && incomeSource) {
-    // Find the matching income transaction by category ID
-    const matchingIncomeTransaction = transactions.find(
-      (t) => t.type === "income" && t.category === incomeSource
-    );
-
-    // If no matching transaction found, create a new adjusted income entry
-    if (!matchingIncomeTransaction) {
-      // Get the income category name for the description
-      const incomeCategoryObj = categories.income.find(
-        (cat) => cat.id === incomeSource
-      );
-      const categoryName = incomeCategoryObj
-        ? incomeCategoryObj.name
-        : "Income Source";
-
-      // Create an adjusted income transaction that reflects the deduction
-      const adjustedIncome = {
-        id: generateID(),
-        type: "income",
-        category: incomeSource,
-        description: `Adjusted ${categoryName}`,
-        amount: -parseFloat(amountInput.value), // Negative to show it's been deducted
-        date: dateInput.value,
-        adjustedFrom: transaction.id, // Reference to the expense that caused this adjustment
-      };
-
-      transactions.push(adjustedIncome);
-    }
-    // If there is a matching income transaction, update it with an adjustment note
-    else {
-      const adjustmentNote = `Expense deducted: ${transaction.description}`;
-      if (!matchingIncomeTransaction.adjustments) {
-        matchingIncomeTransaction.adjustments = [];
-      }
-      matchingIncomeTransaction.adjustments.push({
-        amount: -parseFloat(amountInput.value),
-        description: adjustmentNote,
-        date: dateInput.value,
-        expenseId: transaction.id,
-      });
-    }
-  }
-
   saveTransactions();
   applyDateFilter();
 
-  // Reset form
+  // Reset form and re-sync the custom controls a form reset cannot reach:
+  // the category dropdown selection and the income-source visibility
   transactionForm.reset();
+  updateCategoryOptions();
+  handleTransactionTypeChange();
   setDefaultDate();
-}
-
-// Generate random ID
-function generateID() {
-  return Math.floor(Math.random() * 1000000000);
 }
 
 // Function to sanitize text to prevent XSS attacks
@@ -488,44 +675,33 @@ function addTransactionDOM(transaction) {
     sourceDiv.textContent = `From: ${formatCategory(transaction.incomeSource)}`;
     categoryDiv.appendChild(sourceDiv);
   }
-  // If this transaction has adjustments, show an indicator
-  if (transaction.adjustments && transaction.adjustments.length > 0) {
-    const adjustmentDiv = document.createElement("div");
-    adjustmentDiv.className = "transaction-adjustment-indicator";
-
-    const totalAdjustment = transaction.adjustments.reduce(
-      (total, adj) => total + adj.amount,
-      0
+  // For income, show the expenses funded from this source (derived on the fly
+  // from the expenses' incomeSource links, never stored on the income row)
+  if (transaction.type === "income") {
+    const linkedExpenses = transactions.filter(
+      (t) => t.type === "expense" && t.incomeSource === transaction.category
     );
-    adjustmentDiv.textContent = `${transaction.adjustments.length} expense adjustment(s)`;
 
-    // Create a detailed tooltip that shows each adjustment
-    const tooltipDetails = transaction.adjustments
-      .map((adj) => {
-        const relatedExpense = transactions.find((t) => t.id === adj.expenseId);
-        const expenseDesc = relatedExpense
-          ? relatedExpense.description
-          : "Unknown expense";
-        return `${formatDate(adj.date)}: ${expenseDesc} (${formatMoney(
-          adj.amount
-        )})`;
-      })
-      .join("\n");
+    if (linkedExpenses.length > 0) {
+      const linkedTotal = linkedExpenses.reduce(
+        (total, t) => total + t.amount,
+        0
+      );
+      const linkedDiv = document.createElement("div");
+      linkedDiv.className = "transaction-adjustment-indicator";
+      linkedDiv.textContent = `${linkedExpenses.length} linked expense(s): ${formatMoney(linkedTotal)}`;
 
-    adjustmentDiv.title = `Original amount: ${formatMoney(
-      transaction.amount
-    )}\nAdjustments total: ${formatMoney(
-      totalAdjustment
-    )}\n\nDetails:\n${tooltipDetails}`;
-    categoryDiv.appendChild(adjustmentDiv);
-  }
-
-  // If this is an adjusted income entry
-  if (transaction.adjustedFrom) {
-    const adjustedDiv = document.createElement("div");
-    adjustedDiv.className = "transaction-adjusted";
-    adjustedDiv.textContent = "Adjustment";
-    categoryDiv.appendChild(adjustedDiv);
+      const tooltipDetails = linkedExpenses
+        .map(
+          (t) =>
+            `${formatDate(t.date)}: ${t.description} (${formatMoney(t.amount)})`
+        )
+        .join("\n");
+      linkedDiv.title = `Expenses paid from this source: ${formatMoney(
+        linkedTotal
+      )}\n\nDetails:\n${tooltipDetails}`;
+      categoryDiv.appendChild(linkedDiv);
+    }
   }
 
   const dateDiv = document.createElement("div");
@@ -539,27 +715,9 @@ function addTransactionDOM(transaction) {
   amountDiv.className = `transaction-amount ${
     transaction.type === "income" ? "income-amount" : "expense-amount"
   }`;
-  // Calculate displayed amount, accounting for adjustments
-  let displayAmount = transaction.amount;
-  let adjustmentText = "";
-
-  // If this is an income with adjustments, show the adjusted amount
-  if (
-    transaction.type === "income" &&
-    transaction.adjustments &&
-    transaction.adjustments.length > 0
-  ) {
-    const adjustmentsTotal = transaction.adjustments.reduce(
-      (adjAcc, adj) => adjAcc + adj.amount,
-      0
-    );
-    displayAmount += adjustmentsTotal;
-    adjustmentText = ` (${formatMoney(transaction.amount)} original)`;
-  }
-
   amountDiv.textContent = `${
     transaction.type === "income" ? "+" : "-"
-  } ${formatMoney(Math.abs(displayAmount))}${adjustmentText}`;
+  } ${formatMoney(Math.abs(transaction.amount))}`;
 
   const actionsDiv = document.createElement("div");
   actionsDiv.className = "transaction-actions";
@@ -567,7 +725,8 @@ function addTransactionDOM(transaction) {
   // Edit button
   const editButton = document.createElement("button");
   editButton.className = "action-btn edit-btn";
-  editButton.setAttribute("title", "Edit Transaction");
+  editButton.setAttribute("data-tooltip", "Edit Transaction");
+  editButton.setAttribute("aria-label", "Edit Transaction");
   editButton.addEventListener("click", () => editTransaction(transaction.id));
 
   editButton.innerHTML = `
@@ -578,7 +737,8 @@ function addTransactionDOM(transaction) {
   // Delete button
   const deleteButton = document.createElement("button");
   deleteButton.className = "action-btn delete-btn";
-  deleteButton.setAttribute("title", "Delete Transaction");
+  deleteButton.setAttribute("data-tooltip", "Delete Transaction");
+  deleteButton.setAttribute("aria-label", "Delete Transaction");
   deleteButton.addEventListener("click", (e) => {
     e.preventDefault(); // Prevent any default browser behavior
     removeTransaction(transaction.id);
@@ -638,54 +798,11 @@ function formatCategory(category) {
 
 // Remove transaction
 function removeTransaction(id) {
-  // Directly remove transaction without confirmation
-  const transactionToDelete = transactions.find((t) => t.id === id);
-
-  if (transactionToDelete) {
-    // If it's an expense with an income source, we need to update the related income adjustment
-    if (
-      transactionToDelete.type === "expense" &&
-      transactionToDelete.incomeSource
-    ) {
-      // Find any income transactions with adjustments related to this expense
-      const affectedIncomeTransactions = transactions.filter(
-        (t) =>
-          t.type === "income" &&
-          t.adjustments &&
-          t.adjustments.some((adj) => adj.expenseId === id)
-      );
-
-      // Remove the adjustment from each affected income transaction
-      affectedIncomeTransactions.forEach((incomeTransaction) => {
-        incomeTransaction.adjustments = incomeTransaction.adjustments.filter(
-          (adj) => adj.expenseId !== id
-        );
-
-        // If there are no more adjustments, remove the adjustments array
-        if (incomeTransaction.adjustments.length === 0) {
-          delete incomeTransaction.adjustments;
-        }
-      });
-
-      // Also delete any adjusted income entries specifically created for this expense
-      const adjustedIncomeIndices = [];
-      transactions.forEach((t, index) => {
-        if (t.type === "income" && t.adjustedFrom === id) {
-          adjustedIncomeIndices.push(index);
-        }
-      });
-
-      // Remove the adjusted income entries in reverse order to avoid index shifting
-      for (let i = adjustedIncomeIndices.length - 1; i >= 0; i--) {
-        transactions.splice(adjustedIncomeIndices[i], 1);
-      }
-    }
-
-    // Remove the transaction itself
-    transactions = transactions.filter((transaction) => transaction.id !== id);
-    saveTransactions();
-    applyDateFilter();
-  }
+  // Directly remove transaction without confirmation. Any link to an income
+  // source lives on the expense itself, so nothing else needs cleanup.
+  transactions = transactions.filter((transaction) => transaction.id !== id);
+  saveTransactions();
+  applyDateFilter();
 }
 
 // Edit transaction function (called when edit button is clicked)
@@ -726,7 +843,7 @@ function editTransaction(id) {
   }
 
   // Show the modal
-  editTransactionModal.style.display = "block";
+  openModal(editTransactionModal);
 }
 
 // Update category options in the edit form based on transaction type
@@ -765,7 +882,7 @@ function saveEditedTransaction(e) {
     return;
   }
 
-  const id = parseInt(editTransactionId.value);
+  const id = editTransactionId.value;
 
   // Find the index of the transaction in the array
   const index = transactions.findIndex((t) => t.id === id);
@@ -774,17 +891,9 @@ function saveEditedTransaction(e) {
     // Get the old transaction data before updating
     const oldTransaction = transactions[index];
 
-    // Check if we're changing the amount of an expense that's linked to an income source
-    let adjustmentNeedsUpdate = false;
-    let oldIncomeSource = null;
-
-    if (oldTransaction.type === "expense" && oldTransaction.incomeSource) {
-      oldIncomeSource = oldTransaction.incomeSource;
-      adjustmentNeedsUpdate = true;
-    }
-    // Update the transaction
-    transactions[index] = {
-      id: id,
+    // Spread the old transaction so fields the form does not edit survive
+    const updatedTransaction = {
+      ...oldTransaction,
       type: editTypeInput.value,
       category: editCategoryInput.value,
       description: editDescriptionInput.value.trim(),
@@ -798,56 +907,15 @@ function saveEditedTransaction(e) {
       const editIncomeSource = document.getElementById("edit-income-source");
       const newIncomeSource = editIncomeSource ? editIncomeSource.value : null;
 
-      // If we have a new income source or we had one before, use it
+      // If we have a new income source or we had one before, keep it
       if (newIncomeSource) {
-        transactions[index].incomeSource = newIncomeSource;
-      } else if (oldIncomeSource) {
-        transactions[index].incomeSource = oldIncomeSource;
+        updatedTransaction.incomeSource = newIncomeSource;
       }
+    } else {
+      delete updatedTransaction.incomeSource;
     }
 
-    // If this was an expense tied to an income source, update the corresponding adjustment
-    if (adjustmentNeedsUpdate) {
-      // Find any income transactions with adjustments related to this expense
-      const affectedIncomeTransactions = transactions.filter(
-        (t) =>
-          t.type === "income" &&
-          t.adjustments &&
-          t.adjustments.some((adj) => adj.expenseId === id)
-      );
-
-      affectedIncomeTransactions.forEach((incomeTransaction) => {
-        const adjIndex = incomeTransaction.adjustments.findIndex(
-          (adj) => adj.expenseId === id
-        );
-        if (adjIndex !== -1) {
-          // Update the adjustment amount based on the new expense amount
-          const oldAdjustment = incomeTransaction.adjustments[adjIndex];
-          incomeTransaction.adjustments[adjIndex] = {
-            ...oldAdjustment,
-            amount: -parseFloat(editAmountInput.value),
-            description: `Expense deducted: ${editDescriptionInput.value.trim()}`,
-            date: editDateInput.value,
-          };
-        }
-      });
-
-      // Handle adjusted income entries that were created specifically for this expense
-      const adjustedIncomeIndex = transactions.findIndex(
-        (t) => t.type === "income" && t.adjustedFrom === id
-      );
-
-      if (adjustedIncomeIndex !== -1) {
-        // Update the adjusted income transaction
-        transactions[adjustedIncomeIndex].amount = -parseFloat(
-          editAmountInput.value
-        );
-        transactions[adjustedIncomeIndex].date = editDateInput.value;
-        transactions[
-          adjustedIncomeIndex
-        ].description = `Adjusted ${formatCategory(oldIncomeSource)}`;
-      }
-    }
+    transactions[index] = updatedTransaction;
 
     // Save to localStorage and update UI
     saveTransactions();
@@ -860,7 +928,7 @@ function saveEditedTransaction(e) {
 
 // Close the edit transaction modal
 function closeEditTransactionModal() {
-  editTransactionModal.style.display = "none";
+  closeModalElement(editTransactionModal);
   editTransactionForm.reset();
 }
 
@@ -879,31 +947,18 @@ function filterTransactions(filterType) {
 
 // Apply date range filter
 function applyDateFilter() {
-  const startDate = startDateInput.value
-    ? new Date(startDateInput.value)
-    : null;
-  const endDate = endDateInput.value ? new Date(endDateInput.value) : null;
   const filterControls = document.querySelector(".filter-controls");
+  const hasDateRange = Boolean(startDateInput.value && endDateInput.value);
 
-  if (startDate && endDate) {
-    endDate.setDate(endDate.getDate() + 1);
+  filteredTransactions = filterByDateRange(
+    transactions,
+    startDateInput.value || null,
+    endDateInput.value || null
+  );
 
-    filteredTransactions = transactions.filter((transaction) => {
-      const transDate = new Date(transaction.date);
-      return transDate >= startDate && transDate < endDate;
-    });
-
-    // Add visual indicator that filters are active
-    if (filterControls) {
-      filterControls.classList.add("active");
-    }
-  } else {
-    filteredTransactions = [...transactions];
-
-    // Remove active indicator when no filters are applied
-    if (filterControls) {
-      filterControls.classList.remove("active");
-    }
+  // Add visual indicator that filters are active
+  if (filterControls) {
+    filterControls.classList.toggle("active", hasDateRange);
   }
 
   updateFilteredUI();
@@ -977,13 +1032,21 @@ function updateFilteredUI() {
   }
 }
 
+// Transactions inside the analysis window selected in the UI
+function getAnalysisTransactions() {
+  const { startDate, endDate } = windowRange(analysisWindow);
+  return filterByDateRange(transactions, startDate, endDate);
+}
+
 // Get data for category chart
 function getCategoryChartData(type) {
   // Group transactions by category and sum amounts
   const categoryData = {};
 
-  // Filter by transaction type
-  const typeTransactions = filteredTransactions.filter((t) => t.type === type);
+  // Data for the selected analysis window, filtered by transaction type
+  const typeTransactions = getAnalysisTransactions().filter(
+    (t) => t.type === type
+  );
 
   // If no transactions of this type, return empty data
   if (typeTransactions.length === 0) {
@@ -1001,25 +1064,11 @@ function getCategoryChartData(type) {
   // Group by category and sum amounts
   typeTransactions.forEach((transaction) => {
     const categoryName = formatCategory(transaction.category);
-    let amount = transaction.amount;
-
-    // Include adjustments in the total for income transactions
-    if (
-      transaction.type === "income" &&
-      transaction.adjustments &&
-      transaction.adjustments.length > 0
-    ) {
-      const adjustmentsTotal = transaction.adjustments.reduce(
-        (total, adj) => total + adj.amount,
-        0
-      );
-      amount += adjustmentsTotal;
-    }
 
     if (categoryData[categoryName]) {
-      categoryData[categoryName] += amount;
+      categoryData[categoryName] += transaction.amount;
     } else {
-      categoryData[categoryName] = amount;
+      categoryData[categoryName] = transaction.amount;
     }
   });
 
@@ -1064,6 +1113,24 @@ function generateCategoryColors(count, type) {
   }
 
   return colors;
+}
+
+// Setup the time-window selector for the spending analysis
+function setupWindowTabs() {
+  const windowTabs = document.querySelectorAll(".window-tab");
+
+  windowTabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      windowTabs.forEach((t) => {
+        t.classList.remove("active");
+        t.setAttribute("aria-pressed", "false");
+      });
+      tab.classList.add("active");
+      tab.setAttribute("aria-pressed", "true");
+      analysisWindow = tab.getAttribute("data-window");
+      updateCategoryChart();
+    });
+  });
 }
 
 // Setup event listeners for category chart tabs
@@ -1113,6 +1180,86 @@ function updateCategoryChart(type) {
 
   // Update chart
   myCategoryChart.update();
+
+  // Keep the year-to-date entry totals in sync with the selected tab
+  updateEntryTotals(type);
+}
+
+// Render year-to-date totals grouped by description for the given type
+function updateEntryTotals(type) {
+  const titleEl = document.getElementById("entry-totals-title");
+  const hintEl = document.getElementById("entry-totals-hint");
+  const listEl = document.getElementById("entry-totals-list");
+  if (!titleEl || !listEl) return;
+
+  const { startDate, endDate } = windowRange(analysisWindow);
+  const summaries = summarizeByDescription(
+    transactions,
+    type,
+    startDate,
+    endDate
+  );
+
+  titleEl.textContent =
+    type === "income" ? "Income by entry" : "Spending by entry";
+  if (hintEl) {
+    const rangeText =
+      startDate && endDate
+        ? `${formatDate(startDate)} to ${formatDate(endDate)}`
+        : "everything recorded";
+    hintEl.textContent = `${WINDOW_LABELS[analysisWindow]} \u00b7 ${rangeText} \u00b7 grouped by description`;
+  }
+
+  listEl.innerHTML = "";
+  listEl.classList.toggle("income", type === "income");
+
+  if (summaries.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "entry-total-empty";
+    empty.textContent = `No ${type} entries in this period.`;
+    listEl.appendChild(empty);
+    return;
+  }
+
+  const grandTotal = summaries.reduce((total, s) => total + s.total, 0);
+
+  summaries.forEach(({ description, count, total }) => {
+    const item = document.createElement("li");
+    item.className = "entry-total-item";
+
+    const row = document.createElement("div");
+    row.className = "entry-total-row";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "entry-total-name";
+    nameEl.textContent = description;
+
+    const countEl = document.createElement("span");
+    countEl.className = "entry-total-count";
+    countEl.textContent = `${count} transaction${count === 1 ? "" : "s"}`;
+
+    const amountEl = document.createElement("span");
+    amountEl.className = `entry-total-amount ${
+      type === "income" ? "income-amount" : "expense-amount"
+    }`;
+    amountEl.textContent = formatMoney(total);
+
+    row.appendChild(nameEl);
+    row.appendChild(countEl);
+    row.appendChild(amountEl);
+
+    const bar = document.createElement("div");
+    bar.className = "entry-total-bar";
+    const fill = document.createElement("div");
+    fill.className = "entry-total-bar-fill";
+    fill.style.width =
+      grandTotal > 0 ? `${Math.round((total / grandTotal) * 100)}%` : "0%";
+    bar.appendChild(fill);
+
+    item.appendChild(row);
+    item.appendChild(bar);
+    listEl.appendChild(item);
+  });
 }
 
 // Generate PDF
@@ -1140,29 +1287,9 @@ function generatePDF() {
   doc.setTextColor(0);
   doc.text("Summary", 14, 30);
 
-  const income = filteredTransactions
-    .filter((transaction) => transaction.type === "income")
-    .reduce((acc, transaction) => {
-      // Add the base transaction amount
-      let totalAmount = transaction.amount;
-
-      // If there are adjustments, add them to the total
-      if (transaction.adjustments && transaction.adjustments.length > 0) {
-        const adjustmentsTotal = transaction.adjustments.reduce(
-          (adjAcc, adj) => adjAcc + adj.amount,
-          0
-        );
-        totalAmount += adjustmentsTotal;
-      }
-
-      return acc + totalAmount;
-    }, 0);
-
-  const expense = filteredTransactions
-    .filter((transaction) => transaction.type === "expense")
-    .reduce((acc, transaction) => acc + transaction.amount, 0);
-
-  const balance = income - expense;
+  // Same totals as the dashboard and the print preview (computeTotals), so
+  // expenses linked to an income source are never counted twice
+  const { income, expense, balance } = computeTotals(filteredTransactions);
 
   doc.setFontSize(10);
   doc.setTextColor(0);
@@ -1190,30 +1317,11 @@ function generatePDF() {
   doc.setTextColor(0);
   doc.text("Transactions", 14, doc.lastAutoTable.finalY + 10);
   const tableData = filteredTransactions.map((transaction) => {
-    // Calculate displayed amount, accounting for adjustments
-    let displayAmount = transaction.amount;
     let notes = "";
-
-    // Handle adjustments for income transactions
-    if (
-      transaction.type === "income" &&
-      transaction.adjustments &&
-      transaction.adjustments.length > 0
-    ) {
-      const adjustmentsTotal = transaction.adjustments.reduce(
-        (adjAcc, adj) => adjAcc + adj.amount,
-        0
-      );
-      displayAmount += adjustmentsTotal;
-      notes = `Original: ${formatMoney(
-        transaction.amount
-      )}, Adjusted by expenses`;
-    }
 
     // Add income source info for expenses
     if (transaction.type === "expense" && transaction.incomeSource) {
-      const sourceName = formatCategory(transaction.incomeSource);
-      notes = `Deducted from: ${sourceName}`;
+      notes = `Deducted from: ${formatCategory(transaction.incomeSource)}`;
     }
 
     return [
@@ -1221,7 +1329,7 @@ function generatePDF() {
       transaction.description,
       formatCategory(transaction.category),
       transaction.type.charAt(0).toUpperCase() + transaction.type.slice(1),
-      formatMoney(displayAmount),
+      formatMoney(transaction.amount),
       notes,
     ];
   });
@@ -1260,15 +1368,8 @@ function generatePDF() {
 
 // Show print modal with preview
 function showPrintModal() {
-  const income = filteredTransactions
-    .filter((transaction) => transaction.type === "income")
-    .reduce((acc, transaction) => acc + transaction.amount, 0);
-
-  const expense = filteredTransactions
-    .filter((transaction) => transaction.type === "expense")
-    .reduce((acc, transaction) => acc + transaction.amount, 0);
-
-  const balance = income - expense;
+  // Same totals as the dashboard and the generated PDF
+  const { income, expense, balance } = computeTotals(filteredTransactions);
 
   // Create safe HTML using DOM methods instead of string concatenation
   const container = document.createElement("div");
@@ -1407,30 +1508,139 @@ function showPrintModal() {
   previewTransactions.appendChild(transactionsContainer);
 
   // Display the modal
-  printModal.style.display = "block";
+  openModal(printModal);
 }
 
 // Hide print modal
 function closePrintModal() {
-  printModal.style.display = "none";
+  closeModalElement(printModal);
 }
 
 // Initialize custom category dropdown
 function initializeCustomCategoryDropdown() {
+  customSelectTrigger.setAttribute("tabindex", "0");
+  customSelectTrigger.setAttribute("role", "button");
+  customSelectTrigger.setAttribute("aria-haspopup", "listbox");
+  customSelectTrigger.setAttribute("aria-expanded", "false");
+  customSelectTrigger.setAttribute("aria-controls", "custom-category-options");
+
   // Toggle dropdown on click
   customSelectTrigger.addEventListener("click", function () {
-    customCategorySelect.classList.toggle("open");
+    toggleCategoryDropdown(false);
+  });
+
+  // Keyboard support for the trigger
+  customSelectTrigger.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+      e.preventDefault();
+      toggleCategoryDropdown(true);
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      openCategoryDropdown(true);
+    } else if (e.key === "Escape") {
+      closeCategoryDropdown(true);
+    }
+  });
+
+  // Keyboard support for the options list
+  customOptions.addEventListener("keydown", function (e) {
+    const options = getDropdownOptions();
+    const currentIndex = options.indexOf(document.activeElement);
+
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        focusDropdownOption(options, currentIndex + 1);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        focusDropdownOption(options, currentIndex - 1);
+        break;
+      case "Home":
+        e.preventDefault();
+        focusDropdownOption(options, 0);
+        break;
+      case "End":
+        e.preventDefault();
+        focusDropdownOption(options, options.length - 1);
+        break;
+      case "Enter":
+      case " ":
+      case "Spacebar":
+        e.preventDefault();
+        document.activeElement.click();
+        break;
+      case "Escape":
+        e.preventDefault();
+        closeCategoryDropdown(true);
+        break;
+      default:
+        break;
+    }
   });
 
   // Close the dropdown when clicking outside
   document.addEventListener("click", function (e) {
     if (!customCategorySelect.contains(e.target)) {
-      customCategorySelect.classList.remove("open");
+      closeCategoryDropdown(false);
+    }
+  });
+
+  // Close the dropdown when keyboard focus leaves it
+  customCategorySelect.addEventListener("focusout", function (e) {
+    if (!customCategorySelect.contains(e.relatedTarget)) {
+      closeCategoryDropdown(false);
     }
   });
 
   // Setup custom options based on transaction type selected
   updateCustomCategoryOptions();
+}
+
+// Return the selectable items in the custom category dropdown
+function getDropdownOptions() {
+  return Array.from(customOptions.querySelectorAll('[role="option"]'));
+}
+
+// Move keyboard focus to a dropdown option, wrapping around the list
+function focusDropdownOption(options, index) {
+  if (options.length === 0) return;
+  const wrapped = ((index % options.length) + options.length) % options.length;
+  options[wrapped].focus();
+}
+
+// Open the custom category dropdown, optionally moving focus to an option
+function openCategoryDropdown(moveFocus) {
+  customCategorySelect.classList.add("open");
+  customSelectTrigger.setAttribute("aria-expanded", "true");
+
+  if (moveFocus) {
+    const options = getDropdownOptions();
+    const selected =
+      customOptions.querySelector('[role="option"].selected') || options[0];
+    if (selected) {
+      selected.focus();
+    }
+  }
+}
+
+// Close the custom category dropdown
+function closeCategoryDropdown(returnFocusToTrigger) {
+  const wasOpen = customCategorySelect.classList.contains("open");
+  customCategorySelect.classList.remove("open");
+  customSelectTrigger.setAttribute("aria-expanded", "false");
+
+  if (wasOpen && returnFocusToTrigger) {
+    customSelectTrigger.focus();
+  }
+}
+
+function toggleCategoryDropdown(moveFocus) {
+  if (customCategorySelect.classList.contains("open")) {
+    closeCategoryDropdown(moveFocus);
+  } else {
+    openCategoryDropdown(moveFocus);
+  }
 }
 
 // Update custom category options in dropdown
@@ -1442,16 +1652,15 @@ function updateCustomCategoryOptions() {
 
   // Create options for each category
   categories[selectedType].forEach((category) => {
-    const isDefault = defaultCategories[selectedType].some(
-      (c) => c.id === category.id
-    );
-
-    addCategoryToDropdown(category, selectedType, isDefault);
+    addCategoryToDropdown(category, selectedType);
   });
 
   // Add "Add New Category" option at the bottom
   const addNewOption = document.createElement("div");
   addNewOption.className = "add-new-category";
+  addNewOption.setAttribute("role", "option");
+  addNewOption.setAttribute("tabindex", "-1");
+  addNewOption.setAttribute("aria-selected", "false");
   addNewOption.innerHTML = `
     <svg width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
       <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z" />
@@ -1460,7 +1669,7 @@ function updateCustomCategoryOptions() {
   `;
   addNewOption.addEventListener("click", function (e) {
     e.stopPropagation();
-    customCategorySelect.classList.remove("open");
+    closeCategoryDropdown(true);
     showCategoryModal();
   });
 
@@ -1474,65 +1683,57 @@ function updateCustomCategoryOptions() {
     );
   } else {
     selectedOptionText.textContent = "Select a category";
+    updateDeleteCategoryButton();
   }
 }
 
 // Add a category to the custom dropdown
-function addCategoryToDropdown(category, type, isDefault = false) {
+function addCategoryToDropdown(category, type) {
   const optionItem = document.createElement("div");
   optionItem.className = "option-item";
   optionItem.dataset.value = category.id;
   optionItem.dataset.type = type;
+  optionItem.setAttribute("role", "option");
+  optionItem.setAttribute("tabindex", "-1");
+  optionItem.setAttribute("aria-selected", "false");
 
   // Option content with text and action buttons
   optionItem.innerHTML = `
-    <span class="option-text">${category.name}</span>
+    <span class="option-text">${sanitizeHTML(category.name)}</span>
     <div class="option-actions">
-      ${
-        !isDefault
-          ? `
-      <button class="option-action-btn edit-btn" title="Edit Category">
+      <button class="option-action-btn edit-btn" data-tooltip="Edit Category" aria-label="Edit Category">
         <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
           <path d="M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z"/>
           <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
         </svg>
       </button>
-      <button class="option-action-btn delete-btn" title="Delete Category">
+      <button class="option-action-btn delete-btn" data-tooltip="Delete Category" aria-label="Delete Category">
         <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
           <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
           <path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
         </svg>
       </button>
-      `
-          : ""
-      }
     </div>
   `;
 
   // Add click event for selecting the category option
   optionItem.addEventListener("click", function () {
     selectCategoryOption(category.id, category.name);
-    customCategorySelect.classList.remove("open");
+    closeCategoryDropdown(true);
   });
 
-  // Add event handlers for edit and delete buttons if not a default category
-  if (!isDefault) {
-    const editButton = optionItem.querySelector(".edit-btn");
-    if (editButton) {
-      editButton.addEventListener("click", function (e) {
-        e.stopPropagation(); // Prevent option selection
-        showCategoryEditModal(category.id, category.name, type);
-      });
-    }
+  // Add event handlers for the edit and delete buttons
+  const editButton = optionItem.querySelector(".edit-btn");
+  editButton.addEventListener("click", function (e) {
+    e.stopPropagation(); // Prevent option selection
+    showCategoryEditModal(category.id, category.name, type);
+  });
 
-    const deleteButton = optionItem.querySelector(".delete-btn");
-    if (deleteButton) {
-      deleteButton.addEventListener("click", function (e) {
-        e.stopPropagation(); // Prevent option selection
-        deleteCategoryFromDropdown(category.id, type);
-      });
-    }
-  }
+  const deleteButton = optionItem.querySelector(".delete-btn");
+  deleteButton.addEventListener("click", function (e) {
+    e.stopPropagation(); // Prevent option selection
+    deleteCategoryFromDropdown(category.id, type);
+  });
 
   customOptions.appendChild(optionItem);
 }
@@ -1550,10 +1751,14 @@ function selectCategoryOption(value, text) {
   options.forEach((option) => {
     if (option.dataset.value === value) {
       option.classList.add("selected");
+      option.setAttribute("aria-selected", "true");
     } else {
       option.classList.remove("selected");
+      option.setAttribute("aria-selected", "false");
     }
   });
+
+  updateDeleteCategoryButton();
 }
 
 // Show the edit modal for a category
@@ -1610,11 +1815,15 @@ function hideCategoryEditModal() {
   currentCategoryType = null;
 }
 
+// Whether any transaction references a category: either as its own category
+// or as the income source an expense is deducted from
+function isCategoryInUse(id) {
+  return transactions.some((t) => t.category === id || t.incomeSource === id);
+}
+
 // Delete a category from the dropdown
 function deleteCategoryFromDropdown(id, type) {
-  const categoryUsed = transactions.some((t) => t.category === id);
-
-  if (categoryUsed) {
+  if (isCategoryInUse(id)) {
     alert("This category is used in transactions and cannot be deleted.");
     return;
   }
@@ -1661,6 +1870,14 @@ function updateCategoryOptions() {
 saveEditedCategoryBtn.addEventListener("click", saveEditedCategory);
 cancelCategoryEditBtn.addEventListener("click", hideCategoryEditModal);
 
+// Allow Escape to dismiss the inline category edit popup
+categoryEditModal.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    hideCategoryEditModal();
+  }
+});
+
 // Edit category with Enter key
 editCategoryNameInput.addEventListener("keypress", function (e) {
   if (e.key === "Enter") {
@@ -1668,6 +1885,62 @@ editCategoryNameInput.addEventListener("keypress", function (e) {
     saveEditedCategory();
   }
 });
+
+// Floating hover/focus hints for buttons marked with a data-tooltip attribute.
+// The hint element lives on <body> so no card or dropdown can clip it.
+function setupTooltips() {
+  const tooltip = document.createElement("div");
+  tooltip.className = "app-tooltip";
+  tooltip.setAttribute("role", "tooltip");
+  tooltip.hidden = true;
+  document.body.appendChild(tooltip);
+
+  function showTooltip(target) {
+    tooltip.textContent = target.getAttribute("data-tooltip");
+    tooltip.hidden = false;
+
+    const rect = target.getBoundingClientRect();
+    const tip = tooltip.getBoundingClientRect();
+
+    // Above the target by default, flipped below when there is no room
+    let top = rect.top - tip.height - 8;
+    if (top < 4) {
+      top = rect.bottom + 8;
+    }
+
+    // Centered on the target, clamped to stay inside the viewport
+    let left = rect.left + rect.width / 2 - tip.width / 2;
+    left = Math.min(Math.max(left, 4), window.innerWidth - tip.width - 4);
+
+    tooltip.style.top = `${top}px`;
+    tooltip.style.left = `${left}px`;
+  }
+
+  function hideTooltip() {
+    tooltip.hidden = true;
+  }
+
+  document.addEventListener("mouseover", (e) => {
+    const target = e.target.closest("[data-tooltip]");
+    if (target) {
+      showTooltip(target);
+    } else {
+      hideTooltip();
+    }
+  });
+
+  document.addEventListener("focusin", (e) => {
+    const target = e.target.closest("[data-tooltip]");
+    if (target) {
+      showTooltip(target);
+    } else {
+      hideTooltip();
+    }
+  });
+
+  document.addEventListener("focusout", hideTooltip);
+  window.addEventListener("scroll", hideTooltip, true);
+}
 
 // Initialize app
 function init() {
@@ -1678,7 +1951,9 @@ function init() {
   loadCategories();
   setupFormToggle();
   setupFilterHistoryToggle();
+  setupDataActionsToggle();
   setupChartsToggle();
+  setupTooltips();
   handleMobileLayout(); // Initialize mobile layout adjustments
 }
 
@@ -1698,6 +1973,7 @@ function setupFormToggle() {
 
   function toggleForm() {
     const isExpanded = formContent.classList.toggle("expanded");
+    toggleBtn.setAttribute("aria-expanded", String(isExpanded));
 
     if (isExpanded) {
       formContent.style.display = "block";
@@ -1739,6 +2015,7 @@ function setupFilterHistoryToggle() {
   collapseIcon.style.display = "none";
   function toggleFilterHistory() {
     const isExpanded = filterHistoryContent.classList.toggle("expanded");
+    toggleBtn.setAttribute("aria-expanded", String(isExpanded));
     const isMobile = window.innerWidth <= 768;
 
     if (isExpanded) {
@@ -1765,6 +2042,47 @@ function setupFilterHistoryToggle() {
   });
 }
 
+// Setup collapsible data-actions container (export / import / delete all)
+function setupDataActionsToggle() {
+  const dataActionsHeader = document.querySelector(".data-actions-header");
+  const dataActionsContent = document.querySelector(".data-actions-content");
+  const toggleBtn = document.getElementById("toggle-data-actions-btn");
+  const expandIcon = document.querySelector(".data-actions-expand-icon");
+  const collapseIcon = document.querySelector(".data-actions-collapse-icon");
+
+  // Ensure the section is closed by default
+  dataActionsContent.classList.remove("expanded");
+  dataActionsContent.style.display = "none";
+  expandIcon.style.display = "block";
+  collapseIcon.style.display = "none";
+
+  function toggleDataActions() {
+    const isExpanded = dataActionsContent.classList.toggle("expanded");
+    toggleBtn.setAttribute("aria-expanded", String(isExpanded));
+
+    if (isExpanded) {
+      dataActionsContent.style.display = "block";
+      expandIcon.style.display = "none";
+      collapseIcon.style.display = "block";
+    } else {
+      // We can't just set display to 'none' immediately or the animation won't work
+      setTimeout(() => {
+        if (!dataActionsContent.classList.contains("expanded")) {
+          dataActionsContent.style.display = "none";
+        }
+      }, 300); // Match this with the CSS transition duration
+      expandIcon.style.display = "block";
+      collapseIcon.style.display = "none";
+    }
+  }
+
+  dataActionsHeader.addEventListener("click", toggleDataActions);
+  toggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation(); // Prevent the click from triggering the header click event
+    toggleDataActions();
+  });
+}
+
 // Setup collapsible charts container
 function setupChartsToggle() {
   const chartsHeader = document.querySelector(".charts-header");
@@ -1781,6 +2099,7 @@ function setupChartsToggle() {
 
   function toggleCharts() {
     const isExpanded = chartsContent.classList.toggle("expanded");
+    toggleBtn.setAttribute("aria-expanded", String(isExpanded));
 
     if (isExpanded) {
       chartsContent.style.display = "block";
@@ -1818,24 +2137,18 @@ function loadCategories() {
   expenseCategoriesList.innerHTML = "";
 
   categories.income.forEach((category) => {
-    const isDefault = defaultCategories.income.some(
-      (c) => c.id === category.id
-    );
-    addCategoryToList(category, "income", isDefault);
+    addCategoryToList(category, "income");
   });
 
   categories.expense.forEach((category) => {
-    const isDefault = defaultCategories.expense.some(
-      (c) => c.id === category.id
-    );
-    addCategoryToList(category, "expense", isDefault);
+    addCategoryToList(category, "expense");
   });
 
   updateCategoryOptions();
 }
 
 // Add a category to the appropriate list in the modal
-function addCategoryToList(category, type, isDefault = false) {
+function addCategoryToList(category, type) {
   const listEl =
     type === "income" ? incomeCategoriesList : expenseCategoriesList;
 
@@ -1844,30 +2157,22 @@ function addCategoryToList(category, type, isDefault = false) {
   li.dataset.id = category.id;
 
   li.innerHTML = `
-    <span class="category-name">${category.name}</span>
-    ${
-      !isDefault
-        ? `
-    <button class="action-btn delete-btn delete-category-btn" title="Delete Category">
+    <span class="category-name">${sanitizeHTML(category.name)}</span>
+    <button class="action-btn delete-btn delete-category-btn" data-tooltip="Delete Category" aria-label="Delete Category">
       <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
         <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
         <path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
       </svg>
     </button>
-    `
-        : ""
-    }
   `;
 
   listEl.appendChild(li);
 
-  if (!isDefault) {
-    const deleteBtn = li.querySelector(".delete-category-btn");
-    if (deleteBtn) {
-      deleteBtn.addEventListener("click", () =>
-        deleteCategory(category.id, type)
-      );
-    }
+  const deleteBtn = li.querySelector(".delete-category-btn");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", () =>
+      deleteCategory(category.id, type)
+    );
   }
 }
 
@@ -1891,9 +2196,7 @@ function createCategory(name, type) {
 
 // Delete a category
 function deleteCategory(id, type) {
-  const categoryUsed = transactions.some((t) => t.category === id);
-
-  if (categoryUsed) {
+  if (isCategoryInUse(id)) {
     alert("This category is used in transactions and cannot be deleted.");
     return;
   }
@@ -1907,16 +2210,21 @@ function deleteCategory(id, type) {
   }
 }
 
+// Show the delete icon next to the category select whenever a category is
+// selected. Every category (built-in or created) can be deleted; deleting a
+// category that is used by transactions is still blocked by deleteCategory().
+function updateDeleteCategoryButton() {
+  deleteCategoryBtn.style.display = categoryInput.value ? "" : "none";
+}
+
 // Show the category management modal
 function showCategoryModal() {
-  categoryModal.style.display = "block";
-
-  newCategoryInput.focus();
+  openModal(categoryModal, newCategoryInput);
 }
 
 // Hide the category management modal
 function hideCategoryModal() {
-  categoryModal.style.display = "none";
+  closeModalElement(categoryModal);
 }
 
 // Switch between income and expense category tabs
@@ -1976,13 +2284,6 @@ function setupScrollToTopButton() {
   });
 }
 
-// Setup mobile floating action button
-function setupFloatingActionButton() {
-  // This function is kept as a placeholder to avoid breaking any code that calls it,
-  // but its functionality has been removed as the floating button is no longer needed
-  return;
-}
-
 // Event listeners
 transactionForm.addEventListener("submit", addTransaction);
 
@@ -2011,6 +2312,120 @@ tabs.forEach((tab) => {
 applyFilterBtn.addEventListener("click", applyDateFilter);
 resetFilterBtn.addEventListener("click", resetDateFilter);
 
+// Danger zone: delete everything stored locally and start clean
+clearDataBtn.addEventListener("click", () => {
+  if (!confirm("This will delete all your data and start clean!")) {
+    return;
+  }
+
+  localStorage.removeItem("transactions");
+  localStorage.removeItem("budgetCategories");
+
+  transactions = [];
+  filteredTransactions = [];
+  categories = {
+    income: defaultCategories.income.map((c) => ({ ...c })),
+    expense: defaultCategories.expense.map((c) => ({ ...c })),
+  };
+
+  // Re-render the empty state and restore the default categories
+  resetDateFilter();
+  updateCategoryOptions();
+  handleTransactionTypeChange();
+});
+
+// Export all locally stored data as a JSON backup file
+function exportData() {
+  const backup = {
+    app: "budget-tracker",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    transactions,
+    budgetCategories: categories,
+  };
+
+  const blob = new Blob([JSON.stringify(backup, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `budget-tracker-backup-${toLocalDateString(new Date())}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Replace the locally stored data with a JSON backup created by Export
+function importData(file) {
+  const reader = new FileReader();
+
+  reader.onload = () => {
+    let backup;
+    try {
+      backup = JSON.parse(reader.result);
+    } catch (error) {
+      alert(
+        "Could not read that file. Please choose a JSON backup created by Export."
+      );
+      return;
+    }
+
+    const importedTransactions =
+      backup && Array.isArray(backup.transactions)
+        ? backup.transactions.map(normalizeTransaction).filter(Boolean)
+        : null;
+
+    const importedCategories = backup && backup.budgetCategories;
+    const hasValidCategories =
+      importedCategories &&
+      Array.isArray(importedCategories.income) &&
+      Array.isArray(importedCategories.expense);
+
+    if (importedTransactions === null && !hasValidCategories) {
+      alert("That file does not contain Budget Tracker data.");
+      return;
+    }
+
+    if (
+      !confirm("This will replace your current data with the backup. Continue?")
+    ) {
+      return;
+    }
+
+    if (importedTransactions !== null) {
+      transactions = importedTransactions;
+    }
+    if (hasValidCategories) {
+      categories = {
+        income: importedCategories.income.map((c) => ({ ...c })),
+        expense: importedCategories.expense.map((c) => ({ ...c })),
+      };
+    }
+
+    saveTransactions();
+    saveCategories();
+
+    // Re-render everything from the imported data
+    resetDateFilter();
+    updateCategoryOptions();
+    handleTransactionTypeChange();
+  };
+
+  reader.readAsText(file);
+}
+
+exportDataBtn.addEventListener("click", exportData);
+importDataBtn.addEventListener("click", () => importDataInput.click());
+importDataInput.addEventListener("change", () => {
+  const file = importDataInput.files[0];
+  if (file) {
+    importData(file);
+  }
+  importDataInput.value = ""; // allow importing the same file again
+});
+
 // Print PDF event listeners
 printPdfBtn.addEventListener("click", showPrintModal);
 closeModal.addEventListener("click", closePrintModal);
@@ -2022,6 +2437,9 @@ confirmPrintBtn.addEventListener("click", () => {
 
 // Category management event listeners
 addCategoryBtn.addEventListener("click", showCategoryModal);
+deleteCategoryBtn.addEventListener("click", () => {
+  deleteCategory(categoryInput.value, typeInput.value);
+});
 closeCategoryModal.addEventListener("click", hideCategoryModal);
 
 // Allow adding categories by pressing Enter
@@ -2057,18 +2475,12 @@ window.addEventListener("click", (e) => {
   }
 });
 
-// Event listener for edit transaction type change
-editTypeInput.addEventListener("change", () => {
-  updateEditCategoryOptions(editTypeInput.value);
-});
-
 // Event listener for edit transaction form submission
 editTransactionForm.addEventListener("submit", saveEditedTransaction);
 
 // Event listener for delete button in edit modal
 editDeleteBtn.addEventListener("click", () => {
-  const id = parseInt(editTransactionId.value);
-  removeTransaction(id);
+  removeTransaction(editTransactionId.value);
   closeEditTransactionModal();
 });
 
@@ -2088,25 +2500,28 @@ window.addEventListener("click", (e) => {
   }
 });
 
+// Run the app once the DOM is ready, whether this script runs during parsing
+// or is injected after the document has already loaded
+function onDOMReady(callback) {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", callback);
+  } else {
+    callback();
+  }
+}
+
 // Initialize app on load
-document.addEventListener("DOMContentLoaded", () => {
+onDOMReady(() => {
   initializeChart();
   setDefaultDate();
   init();
   initializeCustomCategoryDropdown();
+  setupWindowTabs();
   setupScrollToTopButton();
-  setupFloatingActionButton();
 });
-
-// Create global functions
-window.removeTransaction = removeTransaction;
 
 // Handle transaction type change to show/hide income source dropdown
-document.addEventListener("DOMContentLoaded", function () {
-  document
-    .getElementById("transaction-type")
-    .addEventListener("change", handleTransactionTypeChange);
-});
+typeInput.addEventListener("change", handleTransactionTypeChange);
 
 function handleTransactionTypeChange() {
   const transactionType = document.getElementById("transaction-type").value;

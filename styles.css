@@ -530,6 +530,89 @@ select:focus {
   border-bottom: 1px solid #e5e7eb;
 }
 
+/* Data backup actions: export / import / delete all (collapsible card) */
+.data-actions-container {
+  background-color: var(--card-bg);
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.data-actions-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  cursor: pointer;
+  background-color: var(--card-bg);
+  transition: var(--transition);
+  width: 100%;
+}
+
+.data-actions-header:hover {
+  background-color: #f9fafb;
+}
+
+.data-actions-header h3 {
+  margin-bottom: 0;
+}
+
+.data-actions-content {
+  padding: 0 1rem 1rem 1rem;
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+
+.data-actions-content.expanded {
+  max-height: 1000px;
+}
+
+.data-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.btn-export-data,
+.btn-import-data,
+.btn-clear-data {
+  width: auto;
+  padding: 0.5rem 1.25rem;
+  font-size: 0.9rem;
+}
+
+.btn-export-data,
+.btn-import-data {
+  background-color: var(--dark-color);
+}
+
+.btn-export-data:hover,
+.btn-import-data:hover {
+  background-color: #111827;
+}
+
+/* Floating hover/focus hints for buttons with a data-tooltip attribute.
+   Rendered on <body> (see setupTooltips in app.js) so no container clips it. */
+.app-tooltip {
+  position: fixed;
+  z-index: 2000;
+  background-color: var(--dark-color);
+  color: #fff;
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: center;
+  max-width: 220px;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
 .tab {
   padding: 0.75rem 1.5rem;
   background: transparent;
@@ -913,7 +996,9 @@ select:focus {
   z-index: 5;
   opacity: 0;
   transform: translateY(10px);
-  transition: opacity 0.3s, transform 0.3s;
+  transition:
+    opacity 0.3s,
+    transform 0.3s;
   cursor: pointer;
   align-items: center;
   justify-content: center;
@@ -1707,7 +1792,9 @@ select:focus {
   /* Adding better touch feedback for transaction items */
   .transaction-item {
     position: relative;
-    transition: transform 0.15s ease, background-color 0.2s ease;
+    transition:
+      transform 0.15s ease,
+      background-color 0.2s ease;
     border-left: 3px solid transparent;
   }
 
@@ -2028,7 +2115,8 @@ select:focus {
 
 .form-header h3,
 .charts-header h3,
-.filter-history-header h3 {
+.filter-history-header h3,
+.data-actions-header h3 {
   position: relative;
   display: inline-block;
   color: var(--dark-color);
@@ -2038,7 +2126,8 @@ select:focus {
 
 .form-header h3:before,
 .charts-header h3:before,
-.filter-history-header h3:before {
+.filter-history-header h3:before,
+.data-actions-header h3:before {
   content: "";
   position: absolute;
   left: 0;
@@ -2127,15 +2216,21 @@ select:focus {
   flex: 1;
 }
 
+/* Delete icon for the category selected in the Add Transaction form */
+.btn-delete-category {
+  color: #dc2626;
+}
+
+.btn-delete-category:hover {
+  color: #dc2626;
+  background-color: rgba(220, 38, 38, 0.1);
+}
+
+/* Category row actions (edit / remove basket) stay visible so they are
+   discoverable and usable on touch devices too */
 .option-actions {
   display: flex;
   gap: 0.25rem;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.option-item:hover .option-actions {
-  opacity: 1;
 }
 
 .option-action-btn {
@@ -2232,6 +2327,145 @@ select:focus {
   .scroll-top-btn:active {
     opacity: 0.8;
     transform: scale(0.97);
-    transition: transform 0.1s ease, opacity 0.1s ease;
+    transition:
+      transform 0.1s ease,
+      opacity 0.1s ease;
+  }
+}
+
+/* Close controls are real <button> elements for keyboard accessibility */
+.close-modal,
+.close-category-modal,
+.close-edit-modal {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+}
+
+/* Visible focus styles for keyboard-operable controls */
+.custom-select-trigger:focus-visible,
+.option-item:focus,
+.add-new-category:focus {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
+/* Spending analysis: time-window selector */
+.window-selection {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.window-tab {
+  padding: 0.4rem 0.9rem;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #6b7280;
+  transition: var(--transition);
+}
+
+.window-tab:hover {
+  color: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+.window-tab.active {
+  color: #fff;
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+/* Spending analysis: year-to-date totals by entry */
+.analysis-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.entry-totals-container h4 {
+  margin: 0 0 0.25rem;
+  color: var(--primary-color);
+  font-size: 1.1rem;
+}
+
+.entry-totals-hint {
+  margin: 0 0 0.75rem;
+  color: #6b7280;
+  font-size: 0.85rem;
+}
+
+.entry-totals-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.entry-total-item {
+  padding: 0.65rem 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.entry-total-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.entry-total-name {
+  flex: 1;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entry-total-count {
+  color: #6b7280;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.entry-total-amount {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.entry-total-bar {
+  height: 6px;
+  margin-top: 0.45rem;
+  background: #f3f4f6;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.entry-total-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: #ef4444;
+}
+
+.entry-totals-list.income .entry-total-bar-fill {
+  background: #10b981;
+}
+
+.entry-total-empty {
+  color: #6b7280;
+  padding: 0.75rem 0;
+}
+
+@media (max-width: 900px) {
+  .analysis-layout {
+    grid-template-columns: 1fr;
   }
 }
