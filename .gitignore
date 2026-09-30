@@ -1,0 +1,10 @@
+# Data backups hold personal financial data and must never be committed.
+# Covers the Export button's own filename and any renamed copy, for anyone
+# who downloads this project and uses the app.
+*.json
+*.bak
+*.backup
+
+# Except dependency manifests, in case tooling is ever added back
+!package.json
+!package-lock.json
