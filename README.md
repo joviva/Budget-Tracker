@@ -30,17 +30,7 @@ export. No build step, no server — all data lives in your browser's
 
 ## Running
 
-No installation needed — open `index.html` directly in a browser, or serve the
-folder:
-
-```bash
-npx serve .
-# or
-python -m http.server
-```
-
-Both `file://` and HTTP work (`app.js` is a classic script, not a module —
-module scripts are blocked over `file://` by CORS).
+No installation needed — open `index.html` directly in your browser.
 
 ## Project layout
 
