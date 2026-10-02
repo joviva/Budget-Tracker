@@ -628,7 +628,7 @@ function addTransaction(e) {
   transactions.push(transaction);
 
   saveTransactions();
-  applyDateFilter();
+  refreshTransactionList();
 
   // Reset form and re-sync the custom controls a form reset cannot reach:
   // the category dropdown selection and the income-source visibility
@@ -802,7 +802,7 @@ function removeTransaction(id) {
   // source lives on the expense itself, so nothing else needs cleanup.
   transactions = transactions.filter((transaction) => transaction.id !== id);
   saveTransactions();
-  applyDateFilter();
+  refreshTransactionList();
 }
 
 // Edit transaction function (called when edit button is clicked)
@@ -919,7 +919,7 @@ function saveEditedTransaction(e) {
 
     // Save to localStorage and update UI
     saveTransactions();
-    applyDateFilter();
+    refreshTransactionList();
 
     // Close the modal
     closeEditTransactionModal();
@@ -945,10 +945,22 @@ function filterTransactions(filterType) {
   });
 }
 
+// Whether the user has actually applied the date range filter. The From/To
+// inputs are pre-filled with the current month on load, but that pre-fill
+// must not act as an implicit filter: until "Apply Filter" is clicked the
+// list shows everything (matching the initial load), and "Reset" lifts it.
+let filterActive = false;
+
+function syncFilterIndicator() {
+  const filterControls = document.querySelector(".filter-controls");
+  if (filterControls) {
+    filterControls.classList.toggle("active", filterActive);
+  }
+}
+
 // Apply date range filter
 function applyDateFilter() {
-  const filterControls = document.querySelector(".filter-controls");
-  const hasDateRange = Boolean(startDateInput.value && endDateInput.value);
+  filterActive = true;
 
   filteredTransactions = filterByDateRange(
     transactions,
@@ -956,26 +968,32 @@ function applyDateFilter() {
     endDateInput.value || null
   );
 
-  // Add visual indicator that filters are active
-  if (filterControls) {
-    filterControls.classList.toggle("active", hasDateRange);
-  }
-
+  syncFilterIndicator();
   updateFilteredUI();
 }
 
 // Reset date filter
 function resetDateFilter() {
+  filterActive = false;
   setDefaultDate();
   filteredTransactions = [...transactions];
 
-  // Remove active indicator when filters are reset
-  const filterControls = document.querySelector(".filter-controls");
-  if (filterControls) {
-    filterControls.classList.remove("active");
-  }
-
+  syncFilterIndicator();
   updateFilteredUI();
+}
+
+// Re-render the transaction list after a mutation. The pre-filled date range
+// only filters when the user has applied it; otherwise show everything,
+// which is what a fresh page load shows. Without this, a new transaction
+// dated outside the pre-filled range vanished from the list and the totals
+// until the page was refreshed.
+function refreshTransactionList() {
+  if (filterActive) {
+    applyDateFilter();
+  } else {
+    filteredTransactions = [...transactions];
+    updateFilteredUI();
+  }
 }
 
 // Update UI with filtered transactions
